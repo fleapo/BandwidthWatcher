@@ -90,28 +90,37 @@ def record_speed():
     return jsonify({"status": "success"})
 
 def downsample_data(timestamps, downloads, uploads, max_points):
-    """使用窗口平均值对数据进行降采样"""
+    """使用固定数量的窗口对数据进行降采样"""
     n = len(timestamps)
     if n <= max_points:
         return timestamps, downloads, uploads
 
-    # 计算窗口大小
+    # 固定输出点数为max_points
     window_size = n // max_points
+    if window_size < 1:
+        window_size = 1
 
-    # 存储降采样后的数据
     new_timestamps = []
     new_downloads = []
     new_uploads = []
 
-    # 使用滑动窗口计算平均值
-    for i in range(0, n - window_size + 1, window_size):
-        # 获取当前窗口的数据
-        window_end = min(i + window_size, n)
-        ts_window = timestamps[i:window_end]
-        dl_window = downloads[i:window_end]
-        ul_window = uploads[i:window_end]
+    # 确保生成固定数量的点
+    for i in range(max_points):
+        start_idx = (i * n) // max_points
+        end_idx = ((i + 1) * n) // max_points
 
-        # 计算窗口内的平均值
+        if start_idx >= n:
+            break
+
+        # 确保至少有一个数据点
+        if end_idx <= start_idx:
+            end_idx = start_idx + 1
+
+        # 计算这个窗口内的平均值
+        ts_window = timestamps[start_idx:end_idx]
+        dl_window = downloads[start_idx:end_idx]
+        ul_window = uploads[start_idx:end_idx]
+
         new_timestamps.append(int(sum(ts_window) / len(ts_window)))
         new_downloads.append(int(sum(dl_window) / len(dl_window)))
         new_uploads.append(int(sum(ul_window) / len(ul_window)))
