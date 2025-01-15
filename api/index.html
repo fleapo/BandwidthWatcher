@@ -55,6 +55,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
         let chart;
+        let isFirstLoad = true;
 
         function createChart(data) {
             const ctx = document.getElementById('speedChart').getContext('2d');
@@ -84,6 +85,9 @@
                 },
                 options: {
                     responsive: true,
+                    animation: {
+                        duration: isFirstLoad ? 1000 : 0
+                    },
                     scales: {
                         y: {
                             beginAtZero: true,
@@ -95,6 +99,7 @@
                     }
                 }
             });
+            isFirstLoad = false;
         }
 
         function updateData() {
