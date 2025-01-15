@@ -59,6 +59,28 @@
 
         function createChart(data) {
             const ctx = document.getElementById('speedChart').getContext('2d');
+            const timeRange = document.getElementById('timeRange').value;
+            const now = Math.floor(Date.now() / 1000);  // 当前时间戳（秒）
+
+            // 根据选择的时间范围确定起始时间
+            let startTime;
+            switch(timeRange) {
+                case 'minute':
+                    startTime = now - 60;  // 1分钟
+                    break;
+                case 'tenminutes':
+                    startTime = now - 600;  // 10分钟
+                    break;
+                case 'hour':
+                    startTime = now - 3600;  // 1小时
+                    break;
+                case 'day':
+                    startTime = now - 86400;  // 24小时
+                    break;
+                case 'week':
+                    startTime = now - 604800;  // 1周
+                    break;
+            }
 
             if (chart) {
                 chart.destroy();
@@ -71,13 +93,19 @@
                     datasets: [
                         {
                             label: '下载速度 (Mbps)',
-                            data: data.download,
+                            data: data.timestamps.map((ts, i) => ({
+                                x: ts * 1000,  // 转换为毫秒
+                                y: data.download[i]
+                            })),
                             borderColor: 'rgb(75, 192, 192)',
                             tension: 0.1
                         },
                         {
                             label: '上传速度 (Mbps)',
-                            data: data.upload,
+                            data: data.timestamps.map((ts, i) => ({
+                                x: ts * 1000,  // 转换为毫秒
+                                y: data.upload[i]
+                            })),
                             borderColor: 'rgb(255, 99, 132)',
                             tension: 0.1
                         }
@@ -89,6 +117,21 @@
                         duration: isFirstLoad ? 1000 : 0
                     },
                     scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: timeRange === 'minute' ? 'second' :
+                                      timeRange === 'tenminutes' ? 'minute' :
+                                      timeRange === 'hour' ? 'minute' :
+                                      timeRange === 'day' ? 'hour' : 'day'
+                            },
+                            min: startTime * 1000,  // 设置固定的起始时间
+                            max: now * 1000,        // 设置固定的结束时间
+                            title: {
+                                display: true,
+                                text: '时间'
+                            }
+                        },
                         y: {
                             beginAtZero: true,
                             title: {
