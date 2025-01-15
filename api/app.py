@@ -24,34 +24,56 @@ def get_supabase_client():
 
 # 数据库初始化
 def init_db():
-    supabase = get_supabase_client()
-    # Supabase会自动创建表，所以这里不需要CREATE TABLE
+    try:
+        supabase = get_supabase_client()
+        # 使用SQL创建表
+        response = supabase.rpc(
+            'create_speed_data_table',
+            {
+                'query': '''
+                CREATE TABLE IF NOT EXISTS public.speed_data (
+                    id SERIAL PRIMARY KEY,
+                    timestamp BIGINT NOT NULL,
+                    download INTEGER NOT NULL,
+                    upload INTEGER NOT NULL,
+                    hostname VARCHAR(255),
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS speed_data_timestamp_idx ON public.speed_data (timestamp);
+                CREATE INDEX IF NOT EXISTS speed_data_hostname_idx ON public.speed_data (hostname);
+                '''
+            }
+        ).execute()
+        print("数据库表初始化成功")
+    except Exception as e:
+        print(f"数据库表初始化失败: {str(e)}")
+
+# 确保调用初始化函数
+init_db()
 
 def batch_write_worker():
     """后台线程：定期将数据批量写入数据库"""
     batch_data = []
     while True:
         try:
-            # 收集数据直到队列为空或达到写入间隔
             try:
                 while True:
                     data = data_queue.get_nowait()
                     batch_data.append({
                         'timestamp': data['timestamp'],
                         'download': data['download'],
-                        'upload': data['upload']
+                        'upload': data['upload'],
+                        'hostname': data.get('hostname')  # 使用get方法使hostname为可选
                     })
             except queue.Empty:
                 pass
 
-            # 如果有数据要写入
             if batch_data:
                 supabase = get_supabase_client()
                 response = supabase.table('speed_data').insert(batch_data).execute()
                 print(f"Batch wrote {len(batch_data)} records to database")
-                batch_data = []  # 清空批次数据
+                batch_data = []
 
-            # 等待下一个写入间隔
             threading.Event().wait(WRITE_INTERVAL)
         except Exception as e:
             print(f"Error in batch write worker: {e}")
@@ -85,13 +107,19 @@ def get_data(timerange):
 
     try:
         supabase = get_supabase_client()
-        response = (
+        # 添加hostname参数支持
+        hostname = request.args.get('hostname')
+        query = (
             supabase.table('speed_data')
             .select('*')
             .gte('timestamp', start_time)
-            .order('timestamp', desc=False)
-            .execute()
         )
+
+        # 如果指定了hostname，添加过滤条件
+        if hostname:
+            query = query.eq('hostname', hostname)
+
+        response = query.order('timestamp', desc=False).execute()
 
         data = response.data
         if not data:
@@ -128,10 +156,16 @@ def serve_frontend():
     # 检查数据库连接
     try:
         supabase = get_supabase_client()
-        response = supabase.table('speed_data').select('count', count='exact').execute()
+        # 使用更安全的查询方式
+        response = supabase.from_('speed_data').select('*', count='exact').limit(1).execute()
         db_status = "数据库连接正常"
     except Exception as e:
-        db_status = f"数据库连接错误: {str(e)}"
+        if 'does not exist' in str(e):
+            db_status = "数据库表未创建，正在初始化..."
+            # 尝试创建表
+            init_db()
+        else:
+            db_status = f"数据库连接错误: {str(e)}"
 
     # 返回包含数据库状态的HTML页面
     return f'''
