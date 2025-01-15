@@ -89,6 +89,35 @@ def record_speed():
     data_queue.put(data)
     return jsonify({"status": "success"})
 
+def downsample_data(timestamps, downloads, uploads, max_points):
+    """使用窗口平均值对数据进行降采样"""
+    n = len(timestamps)
+    if n <= max_points:
+        return timestamps, downloads, uploads
+
+    # 计算窗口大小
+    window_size = n // max_points
+
+    # 存储降采样后的数据
+    new_timestamps = []
+    new_downloads = []
+    new_uploads = []
+
+    # 使用滑动窗口计算平均值
+    for i in range(0, n - window_size + 1, window_size):
+        # 获取当前窗口的数据
+        window_end = min(i + window_size, n)
+        ts_window = timestamps[i:window_end]
+        dl_window = downloads[i:window_end]
+        ul_window = uploads[i:window_end]
+
+        # 计算窗口内的平均值
+        new_timestamps.append(int(sum(ts_window) / len(ts_window)))
+        new_downloads.append(int(sum(dl_window) / len(dl_window)))
+        new_uploads.append(int(sum(ul_window) / len(ul_window)))
+
+    return new_timestamps, new_downloads, new_uploads
+
 @app.route('/data/<timerange>')
 def get_data(timerange):
     now = datetime.now()
@@ -134,12 +163,8 @@ def get_data(timerange):
         downloads = [row['download'] for row in data]
         uploads = [row['upload'] for row in data]
 
-        # 对数据进行降采样
-        if len(timestamps) > MAX_POINTS:
-            interval = len(timestamps) // MAX_POINTS
-            timestamps = timestamps[::interval]
-            downloads = downloads[::interval]
-            uploads = uploads[::interval]
+        # 使用新的降采样函数
+        timestamps, downloads, uploads = downsample_data(timestamps, downloads, uploads, MAX_POINTS)
 
         result = {
             "timestamps": timestamps,
