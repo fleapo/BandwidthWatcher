@@ -89,43 +89,55 @@ def record_speed():
     data_queue.put(data)
     return jsonify({"status": "success"})
 
-def downsample_data(timestamps, downloads, uploads, max_points):
-    """使用固定数量的窗口对数据进行降采样"""
-    n = len(timestamps)
-    if n <= max_points:
-        return timestamps, downloads, uploads
+def downsample_data(timestamps, downloads, uploads, timerange, max_points):
+    """基于固定时间点的数据采样"""
+    if not timestamps:
+        return [], [], []
 
-    # 固定输出点数为max_points
-    window_size = n // max_points
-    if window_size < 1:
-        window_size = 1
+    now = int(datetime.now().timestamp())
 
-    new_timestamps = []
-    new_downloads = []
-    new_uploads = []
+    # 根据时间范围确定总时长（秒）和采样间隔
+    if timerange == 'minute':
+        duration = 60
+    elif timerange == 'tenminutes':
+        duration = 600
+    elif timerange == 'hour':
+        duration = 3600
+    elif timerange == 'day':
+        duration = 86400
+    else:  # week
+        duration = 604800
 
-    # 确保生成固定数量的点
+    interval = duration / max_points  # 采样间隔
+    start_time = now - duration
+
+    # 创建固定的时间点
+    fixed_timestamps = []
+    fixed_downloads = []
+    fixed_uploads = []
+
+    # 对每个时间点进行采样
     for i in range(max_points):
-        start_idx = (i * n) // max_points
-        end_idx = ((i + 1) * n) // max_points
+        point_time = start_time + (i * interval)
+        next_point_time = point_time + interval
 
-        if start_idx >= n:
-            break
+        # 查找这个时间窗口内的所有数据点
+        window_data = [(ts, dl, ul) for ts, dl, ul in zip(timestamps, downloads, uploads)
+                      if point_time <= ts < next_point_time]
 
-        # 确保至少有一个数据点
-        if end_idx <= start_idx:
-            end_idx = start_idx + 1
+        if window_data:
+            # 如果有数据，计算平均值
+            window_timestamps, window_downloads, window_uploads = zip(*window_data)
+            fixed_timestamps.append(int(point_time))
+            fixed_downloads.append(int(sum(window_downloads) / len(window_downloads)))
+            fixed_uploads.append(int(sum(window_uploads) / len(window_uploads)))
+        else:
+            # 如果没有数据，添加时间点但值为null
+            fixed_timestamps.append(int(point_time))
+            fixed_downloads.append(None)
+            fixed_uploads.append(None)
 
-        # 计算这个窗口内的平均值
-        ts_window = timestamps[start_idx:end_idx]
-        dl_window = downloads[start_idx:end_idx]
-        ul_window = uploads[start_idx:end_idx]
-
-        new_timestamps.append(int(sum(ts_window) / len(ts_window)))
-        new_downloads.append(int(sum(dl_window) / len(dl_window)))
-        new_uploads.append(int(sum(ul_window) / len(ul_window)))
-
-    return new_timestamps, new_downloads, new_uploads
+    return fixed_timestamps, fixed_downloads, fixed_uploads
 
 @app.route('/data/<timerange>')
 def get_data(timerange):
@@ -145,7 +157,6 @@ def get_data(timerange):
 
     try:
         supabase = get_supabase_client()
-        # 添加hostname参数支持
         hostname = request.args.get('hostname')
         query = (
             supabase.table('speed_data')
@@ -153,7 +164,6 @@ def get_data(timerange):
             .gte('timestamp', start_time)
         )
 
-        # 如果指定了hostname，添加过滤条件
         if hostname:
             query = query.eq('hostname', hostname)
 
@@ -172,8 +182,8 @@ def get_data(timerange):
         downloads = [row['download'] for row in data]
         uploads = [row['upload'] for row in data]
 
-        # 使用新的降采样函数
-        timestamps, downloads, uploads = downsample_data(timestamps, downloads, uploads, MAX_POINTS)
+        # 使用基于固定时间点的采样
+        timestamps, downloads, uploads = downsample_data(timestamps, downloads, uploads, timerange, MAX_POINTS)
 
         result = {
             "timestamps": timestamps,

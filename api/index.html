@@ -100,6 +100,7 @@
                             })),
                             borderColor: 'rgb(75, 192, 192)',
                             fill: false,
+                            spanGaps: true,  // 在空值处断开线条
                             tension: 0.1
                         },
                         {
@@ -110,6 +111,7 @@
                             })),
                             borderColor: 'rgb(255, 99, 132)',
                             fill: false,
+                            spanGaps: true,  // 在空值处断开线条
                             tension: 0.1
                         }
                     ]
@@ -140,8 +142,12 @@
                                     day: 'MM-DD'
                                 }
                             },
-                            min: startTime * 1000,  // 设置固定的起始时间
-                            max: now * 1000,        // 设置固定的结束时间
+                            min: startTime * 1000,
+                            max: now * 1000,
+                            ticks: {
+                                source: 'auto',
+                                autoSkip: true
+                            },
                             title: {
                                 display: true,
                                 text: '时间'
