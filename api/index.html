@@ -2,239 +2,118 @@
 <html>
 <head>
     <title>网速监控</title>
-    <script src="https://cdn.jsdmirror.com/npm/chart.js"></script>
-    <script src="https://cdn.jsdmirror.com/npm/date-fns@2.29.3/dist/date-fns.min.js"></script>
-    <script src="https://cdn.jsdmirror.com/npm/date-fns@2.29.3/dist/locale/zh-CN/index.js"></script>
-    <script src="https://cdn.jsdmirror.com/npm/chartjs-adapter-date-fns@2.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         body {
+            font-family: Arial, sans-serif;
             margin: 0;
             padding: 20px;
-            height: 100vh;
+            background-color: #f5f5f5;
         }
         .container {
-            width: 80%;
+            max-width: 1200px;
             margin: 0 auto;
-            height: 100%;
-            max-height: 800px;
-            display: flex;
-            flex-direction: column;
-        }
-        .buttons {
-            margin: 20px 0;
-        }
-        button {
-            padding: 10px 20px;
-            margin-right: 10px;
-            cursor: pointer;
-        }
-        .active {
-            background-color: #4CAF50;
-            color: white;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         .chart-container {
-            flex: 1;
-            position: relative;
-            height: 400px;
-            min-height: 400px;
+            margin-top: 20px;
+            padding: 20px;
+            background-color: white;
+            border-radius: 8px;
+        }
+        .controls {
+            margin-bottom: 20px;
+        }
+        select {
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>网速监控图表</h1>
-        <div class="server-config" style="margin-bottom: 10px;">
-            服务器地址: <input type="text" id="serverHost" value="192.168.31.234" style="width: 120px;">
-            端口: <input type="text" id="serverPort" value="5000" style="width: 60px;">
-            <button onclick="updateServerConfig()">更新</button>
-        </div>
-        <div class="buttons">
-            <button onclick="changeTimeRange('minute')" class="active">最近1分钟</button>
-            <button onclick="changeTimeRange('tenminutes')">最近10分钟</button>
-            <button onclick="changeTimeRange('hour')">最近1小时</button>
-            <button onclick="changeTimeRange('day')">最近24小时</button>
-            <button onclick="changeTimeRange('week')">最近7天</button>
+        <h1>网速监控</h1>
+        <div class="controls">
+            <select id="timeRange">
+                <option value="minute">最近1分钟</option>
+                <option value="tenminutes">最近10分钟</option>
+                <option value="hour">最近1小时</option>
+                <option value="day">最近24小时</option>
+                <option value="week">最近1周</option>
+            </select>
         </div>
         <div class="chart-container">
             <canvas id="speedChart"></canvas>
         </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
         let chart;
-        let currentTimeRange = 'minute';
-        const MAX_Y_PADDING = 20;  // Y轴最大值会比当前最大值多20KB/s
 
-        // 服务器配置
-        let serverHost = '192.168.31.234';
-        let serverPort = '5000';
-
-        function getServerUrl() {
-            return `http://${serverHost}:${serverPort}`;
-        }
-
-        function updateServerConfig() {
-            serverHost = document.getElementById('serverHost').value;
-            serverPort = document.getElementById('serverPort').value;
-            // 立即更新数据
-            updateChart();
-        }
-
-        function getMaxValue(data) {
-            return Math.max(...data.filter(v => typeof v === 'number'));
-        }
-
-        function initChart() {
+        function createChart(data) {
             const ctx = document.getElementById('speedChart').getContext('2d');
 
-            // 设置Chart.js的默认时区和语言
-            Chart.defaults.adapters = {
-                date: {
-                    locale: window.zhCN
-                }
-            };
+            if (chart) {
+                chart.destroy();
+            }
 
             chart = new Chart(ctx, {
                 type: 'line',
                 data: {
+                    labels: data.timestamps.map(ts => new Date(ts * 1000).toLocaleTimeString()),
                     datasets: [
                         {
-                            label: '下载速度 (KB/s)',
+                            label: '下载速度 (Mbps)',
+                            data: data.download,
                             borderColor: 'rgb(75, 192, 192)',
-                            data: [],
-                            tension: 0.4,
-                            fill: false
+                            tension: 0.1
                         },
                         {
-                            label: '上传速度 (KB/s)',
+                            label: '上传速度 (Mbps)',
+                            data: data.upload,
                             borderColor: 'rgb(255, 99, 132)',
-                            data: [],
-                            tension: 0.4,
-                            fill: false
+                            tension: 0.1
                         }
                     ]
                 },
                 options: {
                     responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            position: 'top',
-                        }
-                    },
                     scales: {
-                        x: {
-                            type: 'time',
-                            time: {
-                                displayFormats: {
-                                    second: 'HH:mm:ss',
-                                    minute: 'HH:mm',
-                                    hour: 'MM/dd HH:mm',
-                                    day: 'MM/dd'
-                                },
-                                minUnit: 'second'
-                            },
-                            display: true,
-                            title: {
-                                display: true,
-                                text: '时间'
-                            },
-                            ticks: {
-                                autoSkip: true,
-                                maxRotation: 0,
-                                source: 'auto',
-                                maxTicksLimit: 10  // 限制最大刻度数量
-                            }
-                        },
                         y: {
                             beginAtZero: true,
                             title: {
                                 display: true,
-                                text: '速度 (KB/s)'
-                            },
-                            suggestedMax: 100  // 初始最大值
-                        }
-                    },
-                    animation: false,
-                    elements: {
-                        point: {
-                            radius: 2
-                        },
-                        line: {
-                            borderWidth: 1
+                                text: '速度 (Mbps)'
+                            }
                         }
                     }
                 }
             });
         }
 
-        function updateChart() {
-            fetch(`${getServerUrl()}/data/${currentTimeRange}`)
+        function updateData() {
+            const timeRange = document.getElementById('timeRange').value;
+            fetch(`/data/${timeRange}`)
                 .then(response => response.json())
                 .then(data => {
-                    // console.log('Received data:', data);
-                    const downloadData = data.timestamps.map((ts, i) => ({
-                        x: new Date(ts * 1000),
-                        y: data.download[i]
-                    }));
-                    const uploadData = data.timestamps.map((ts, i) => ({
-                        x: new Date(ts * 1000),
-                        y: data.upload[i]
-                    }));
-
-                    // 计算合适的Y轴最大值
-                    const maxDownload = getMaxValue(data.download);
-                    const maxUpload = getMaxValue(data.upload);
-                    const maxValue = Math.max(maxDownload, maxUpload);
-                    const suggestedMax = Math.ceil((maxValue + MAX_Y_PADDING) / 100) * 100;
-
-                    // 更新Y轴范围
-                    chart.options.scales.y.suggestedMax = suggestedMax;
-
-                    chart.data.datasets[0].data = downloadData;
-                    chart.data.datasets[1].data = uploadData;
-
-                    // 根据实际数据范围自动调整时间刻度
-                    const timestamps = data.timestamps;
-                    if (timestamps.length > 1) {
-                        const timeRange = timestamps[timestamps.length - 1] - timestamps[0];
-                        const seconds = timeRange;
-
-                        // 根据时间范围设置合适的刻度
-                        chart.options.scales.x.ticks.maxTicksLimit =
-                            seconds < 60 ? 6 :     // 1分钟内显示6个刻度
-                            seconds < 600 ? 10 :   // 10分钟内显示10个刻度
-                            seconds < 3600 ? 12 :  // 1小时内显示12个刻度
-                            seconds < 86400 ? 24 : // 24小时内显示24个刻度
-                            7;                     // 超过24小时显示7个刻度
-                    }
-
-                    chart.update('none');
+                    createChart(data);
                 })
-                .catch(error => {
-                    console.error('Error:', error);
-                    // 显示错误信息给用户
-                    alert(`无法连接到服务器 ${getServerUrl()}\n请检查服务器是否运行，以及地址和端口是否正确。`);
-                });
+                .catch(error => console.error('Error:', error));
         }
 
-        function changeTimeRange(range) {
-            currentTimeRange = range;
-            document.querySelectorAll('button').forEach(btn => btn.classList.remove('active'));
-            event.target.classList.add('active');
-            updateChart();
-        }
+        document.getElementById('timeRange').addEventListener('change', updateData);
 
-        document.getElementById('speedChart').style.height = '400px';
+        // 初始加载
+        updateData();
 
-        initChart();
-        updateChart();
-
-        setInterval(function() {
-            if (document.visibilityState === 'visible') {
-                updateChart();
-            }
-        }, 1000);
+        // 每5秒更新一次数据
+        setInterval(updateData, 5000);
     </script>
 </body>
 </html>

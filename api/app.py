@@ -26,24 +26,24 @@ def get_supabase_client():
 def init_db():
     try:
         supabase = get_supabase_client()
-        # 使用SQL创建表
-        response = supabase.rpc(
-            'create_speed_data_table',
-            {
-                'query': '''
-                CREATE TABLE IF NOT EXISTS public.speed_data (
-                    id SERIAL PRIMARY KEY,
-                    timestamp BIGINT NOT NULL,
-                    download INTEGER NOT NULL,
-                    upload INTEGER NOT NULL,
-                    hostname VARCHAR(255),
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS speed_data_timestamp_idx ON public.speed_data (timestamp);
-                CREATE INDEX IF NOT EXISTS speed_data_hostname_idx ON public.speed_data (hostname);
-                '''
-            }
-        ).execute()
+        # 使用SQL创建表 暂时不需要了，因为已经手动创建了
+        # response = supabase.rpc(
+        #     'create_speed_data_table',
+        #     {
+        #         'query': '''
+        #         CREATE TABLE IF NOT EXISTS public.speed_data (
+        #             id SERIAL PRIMARY KEY,
+        #             timestamp BIGINT NOT NULL,
+        #             download INTEGER NOT NULL,
+        #             upload INTEGER NOT NULL,
+        #             hostname VARCHAR(255),
+        #             created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+        #         );
+        #         CREATE INDEX IF NOT EXISTS speed_data_timestamp_idx ON public.speed_data (timestamp);
+        #         CREATE INDEX IF NOT EXISTS speed_data_hostname_idx ON public.speed_data (hostname);
+        #         '''
+        #     }
+        # ).execute()
         print("数据库表初始化成功")
     except Exception as e:
         print(f"数据库表初始化失败: {str(e)}")
@@ -153,47 +153,9 @@ def get_data(timerange):
 
 @app.route('/')
 def serve_frontend():
-    # 检查数据库连接
-    try:
-        supabase = get_supabase_client()
-        # 使用更安全的查询方式
-        response = supabase.from_('speed_data').select('*', count='exact').limit(1).execute()
-        db_status = "数据库连接正常"
-    except Exception as e:
-        if 'does not exist' in str(e):
-            db_status = "数据库表未创建，正在初始化..."
-            # 尝试创建表
-            init_db()
-        else:
-            db_status = f"数据库连接错误: {str(e)}"
-
-    # 返回包含数据库状态的HTML页面
-    return f'''
-    <html>
-        <head>
-            <title>Speed Test Monitor</title>
-            <style>
-                body {{
-                    font-family: Arial, sans-serif;
-                    margin: 40px;
-                }}
-                .status {{
-                    padding: 10px;
-                    border-radius: 4px;
-                    margin: 20px 0;
-                    background-color: #f0f0f0;
-                }}
-            </style>
-        </head>
-        <body>
-            <h1>Speed Test Monitor</h1>
-            <div class="status">
-                <h2>系统状态</h2>
-                <p>数据库状态: {db_status}</p>
-            </div>
-        </body>
-    </html>
-    '''
+    return send_from_directory('.', 'index.html')
 
 if __name__ == '__main__':
+    import dotenv
+    dotenv.load_dotenv()
     app.run(host='0.0.0.0', port=5000, debug=True)
