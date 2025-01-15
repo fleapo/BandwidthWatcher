@@ -119,16 +119,20 @@ def downsample_data(timestamps, downloads, uploads, timerange, max_points):
     # 对每个时间点进行采样
     for i in range(max_points):
         point_time = start_time + (i * interval)
-        next_point_time = point_time + interval
+        # 扩大时间窗口的范围，前后各延伸interval的一小部分
+        window_start = point_time - (interval * 0.1)  # 向前延伸10%
+        window_end = point_time + (interval * 1.1)    # 向后延伸10%
 
         # 查找这个时间窗口内的所有数据点
         window_data = [(ts, dl, ul) for ts, dl, ul in zip(timestamps, downloads, uploads)
-                      if point_time <= ts < next_point_time]
+                      if window_start <= ts < window_end]
 
         if window_data:
             # 如果有数据，计算平均值
             window_timestamps, window_downloads, window_uploads = zip(*window_data)
-            fixed_timestamps.append(int(point_time))
+            # 使用最接近point_time的时间戳
+            closest_ts = min(window_timestamps, key=lambda x: abs(x - point_time))
+            fixed_timestamps.append(int(closest_ts))
             fixed_downloads.append(int(sum(window_downloads) / len(window_downloads)))
             fixed_uploads.append(int(sum(window_uploads) / len(window_uploads)))
         else:
