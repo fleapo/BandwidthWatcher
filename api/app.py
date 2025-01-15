@@ -5,5 +5,6 @@ app = Flask(__name__)
 @app.route("/")
 def hello():
   # 打印环境变量的keys
-  print(os.environ.keys())
-  return "Hello, World!"
+  env_names = (os.environ.keys())
+  env_names_str = "\n".join(env_names)
+  return env_names_str
