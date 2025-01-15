@@ -94,7 +94,8 @@ def downsample_data(timestamps, downloads, uploads, timerange, max_points):
     if not timestamps:
         return [], [], []
 
-    now = int(datetime.now().timestamp())
+    # 使用数据中的最新时间戳，而不是当前时间
+    now = max(timestamps)
 
     # 根据时间范围确定总时长（秒）和采样间隔
     if timerange == 'minute':
@@ -116,30 +117,33 @@ def downsample_data(timestamps, downloads, uploads, timerange, max_points):
     fixed_downloads = []
     fixed_uploads = []
 
-    # 对每个时间点进行采样
-    for i in range(max_points):
-        point_time = start_time + (i * interval)
-        # 扩大时间窗口的范围，前后各延伸interval的一小部分
-        window_start = point_time - (interval * 0.1)  # 向前延伸10%
-        window_end = point_time + (interval * 1.1)    # 向后延伸10%
+    # 创建时间点到数据的映射，用于快速查找
+    data_map = {ts: (dl, ul) for ts, dl, ul in zip(timestamps, downloads, uploads)}
 
-        # 查找这个时间窗口内的所有数据点
-        window_data = [(ts, dl, ul) for ts, dl, ul in zip(timestamps, downloads, uploads)
-                      if window_start <= ts < window_end]
+    # 对每个时间点进行采样
+    for i in range(max_points + 1):  # +1 确保包含最后一个点
+        point_time = start_time + (i * interval)
+        if point_time > now:
+            break
+
+        # 定义时间窗口
+        window_start = point_time - (interval / 2)
+        window_end = point_time + (interval / 2)
+
+        # 收集窗口内的所有数据点
+        window_data = []
+        for ts in timestamps:
+            if window_start <= ts <= window_end:
+                window_data.append((ts, data_map[ts][0], data_map[ts][1]))
 
         if window_data:
             # 如果有数据，计算平均值
             window_timestamps, window_downloads, window_uploads = zip(*window_data)
-            # 使用最接近point_time的时间戳
+            # 使用窗口内最接近中心点的时间戳
             closest_ts = min(window_timestamps, key=lambda x: abs(x - point_time))
-            fixed_timestamps.append(int(closest_ts))
+            fixed_timestamps.append(closest_ts)
             fixed_downloads.append(int(sum(window_downloads) / len(window_downloads)))
             fixed_uploads.append(int(sum(window_uploads) / len(window_uploads)))
-        else:
-            # 如果没有数据，添加时间点但值为null
-            fixed_timestamps.append(int(point_time))
-            fixed_downloads.append(None)
-            fixed_uploads.append(None)
 
     return fixed_timestamps, fixed_downloads, fixed_uploads
 
