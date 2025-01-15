@@ -9,7 +9,7 @@ from supabase import create_client, Client
 app = Flask(__name__)
 CORS(app)
 
-MAX_POINTS = 100  # 最大数据点数
+MAX_POINTS = 120  # 最大数据点数
 WRITE_INTERVAL = 10  # 每10秒写入一次数据库
 data_queue = queue.Queue()  # 用于存储待写入的数据
 
