@@ -1,11 +1,10 @@
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-import psycopg2
-from psycopg2.extras import execute_values
 from datetime import datetime, timedelta
 import os
 import threading
 import queue
+from supabase import create_client, Client
 
 app = Flask(__name__)
 CORS(app)
@@ -14,31 +13,19 @@ MAX_POINTS = 100  # 最大数据点数
 WRITE_INTERVAL = 10  # 每10秒写入一次数据库
 data_queue = queue.Queue()  # 用于存储待写入的数据
 
-# 数据库连接配置
-DB_CONFIG = {
-    'dbname': os.environ.get('POSTGRES_DATABASE'),
-    'user': os.environ.get('POSTGRES_USER'),
-    'password': os.environ.get('POSTGRES_PASSWORD'),
-    'host': os.environ.get('POSTGRES_HOST'),
-    'port': '5432',
-    'sslmode': 'require'
-}
-
-def get_db_connection():
-    """创建数据库连接"""
-    return psycopg2.connect(**DB_CONFIG)
+# Supabase客户端初始化
+def get_supabase_client():
+    """创建Supabase客户端连接"""
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    if not url or not key:
+        raise Exception("Supabase配置未设置")
+    return create_client(url, key)
 
 # 数据库初始化
 def init_db():
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute('''CREATE TABLE IF NOT EXISTS speed_data
-                   (timestamp BIGINT, download INTEGER, upload INTEGER)''')
-    conn.commit()
-    cur.close()
-    conn.close()
-
-init_db()
+    supabase = get_supabase_client()
+    # Supabase会自动创建表，所以这里不需要CREATE TABLE
 
 def batch_write_worker():
     """后台线程：定期将数据批量写入数据库"""
@@ -49,20 +36,18 @@ def batch_write_worker():
             try:
                 while True:
                     data = data_queue.get_nowait()
-                    batch_data.append((data['timestamp'], data['download'], data['upload']))
+                    batch_data.append({
+                        'timestamp': data['timestamp'],
+                        'download': data['download'],
+                        'upload': data['upload']
+                    })
             except queue.Empty:
                 pass
 
             # 如果有数据要写入
             if batch_data:
-                conn = get_db_connection()
-                cur = conn.cursor()
-                execute_values(cur,
-                    'INSERT INTO speed_data (timestamp, download, upload) VALUES %s',
-                    batch_data)
-                conn.commit()
-                cur.close()
-                conn.close()
+                supabase = get_supabase_client()
+                response = supabase.table('speed_data').insert(batch_data).execute()
                 print(f"Batch wrote {len(batch_data)} records to database")
                 batch_data = []  # 清空批次数据
 
@@ -84,9 +69,6 @@ def record_speed():
 
 @app.route('/data/<timerange>')
 def get_data(timerange):
-    conn = get_db_connection()
-    cur = conn.cursor()
-
     now = datetime.now()
     if timerange == 'minute':
         start_time = int((now - timedelta(minutes=1)).timestamp())
@@ -101,47 +83,52 @@ def get_data(timerange):
     else:
         return jsonify({"error": "Invalid timerange"})
 
-    cur.execute('SELECT * FROM speed_data WHERE timestamp >= %s ORDER BY timestamp ASC', (start_time,))
-    data = cur.fetchall()
-    cur.close()
-    conn.close()
+    try:
+        supabase = get_supabase_client()
+        response = (
+            supabase.table('speed_data')
+            .select('*')
+            .gte('timestamp', start_time)
+            .order('timestamp', desc=False)
+            .execute()
+        )
 
-    if not data:
-        return jsonify({
-            "timestamps": [],
-            "download": [],
-            "upload": []
-        })
+        data = response.data
+        if not data:
+            return jsonify({
+                "timestamps": [],
+                "download": [],
+                "upload": []
+            })
 
-    # 分离数据
-    timestamps = [row[0] for row in data]
-    downloads = [row[1] for row in data]
-    uploads = [row[2] for row in data]
+        # 分离数据
+        timestamps = [row['timestamp'] for row in data]
+        downloads = [row['download'] for row in data]
+        uploads = [row['upload'] for row in data]
 
-    # 对数据进行降采样
-    if len(timestamps) > MAX_POINTS:
-        interval = len(timestamps) // MAX_POINTS
-        timestamps = timestamps[::interval]
-        downloads = downloads[::interval]
-        uploads = uploads[::interval]
+        # 对数据进行降采样
+        if len(timestamps) > MAX_POINTS:
+            interval = len(timestamps) // MAX_POINTS
+            timestamps = timestamps[::interval]
+            downloads = downloads[::interval]
+            uploads = uploads[::interval]
 
-    result = {
-        "timestamps": timestamps,
-        "download": downloads,
-        "upload": uploads
-    }
+        result = {
+            "timestamps": timestamps,
+            "download": downloads,
+            "upload": uploads
+        }
 
-    return jsonify(result)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
 @app.route('/')
 def serve_frontend():
     # 检查数据库连接
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('SELECT 1')
-        cur.close()
-        conn.close()
+        supabase = get_supabase_client()
+        response = supabase.table('speed_data').select('count', count='exact').execute()
         db_status = "数据库连接正常"
     except Exception as e:
         db_status = f"数据库连接错误: {str(e)}"
