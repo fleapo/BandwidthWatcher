@@ -53,6 +53,8 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/moment"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment"></script>
     <script>
         let chart;
         let isFirstLoad = true;
@@ -89,7 +91,6 @@
             chart = new Chart(ctx, {
                 type: 'line',
                 data: {
-                    labels: data.timestamps.map(ts => new Date(ts * 1000).toLocaleTimeString()),
                     datasets: [
                         {
                             label: '下载速度 (Mbps)',
@@ -98,6 +99,7 @@
                                 y: data.download[i]
                             })),
                             borderColor: 'rgb(75, 192, 192)',
+                            fill: false,
                             tension: 0.1
                         },
                         {
@@ -107,6 +109,7 @@
                                 y: data.upload[i]
                             })),
                             borderColor: 'rgb(255, 99, 132)',
+                            fill: false,
                             tension: 0.1
                         }
                     ]
@@ -116,6 +119,12 @@
                     animation: {
                         duration: isFirstLoad ? 1000 : 0
                     },
+                    plugins: {
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false
+                        }
+                    },
                     scales: {
                         x: {
                             type: 'time',
@@ -123,7 +132,13 @@
                                 unit: timeRange === 'minute' ? 'second' :
                                       timeRange === 'tenminutes' ? 'minute' :
                                       timeRange === 'hour' ? 'minute' :
-                                      timeRange === 'day' ? 'hour' : 'day'
+                                      timeRange === 'day' ? 'hour' : 'day',
+                                displayFormats: {
+                                    second: 'HH:mm:ss',
+                                    minute: 'HH:mm',
+                                    hour: 'MM-DD HH:mm',
+                                    day: 'MM-DD'
+                                }
                             },
                             min: startTime * 1000,  // 设置固定的起始时间
                             max: now * 1000,        // 设置固定的结束时间
