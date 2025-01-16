@@ -59,7 +59,132 @@
         let chart;
         let isFirstLoad = true;
         let updateTimer = null;
-        let lastTimestamp = null;  // 保存最后一个数据点的时间戳
+        let fetchTimer = null;
+
+        // 共享的数据存储
+        const dataStore = {
+            data: [],  // 存储格式：{timestamp, download, upload}
+            lastTimestamp: null,
+
+            // 添加新数据
+            addData(newData) {
+                // 移除重复时间戳的数据
+                this.data = this.data.filter(item =>
+                    !newData.timestamps.includes(item.timestamp)
+                );
+
+                // 添加新数据
+                newData.timestamps.forEach((ts, i) => {
+                    this.data.push({
+                        timestamp: ts,
+                        download: newData.download[i],
+                        upload: newData.upload[i]
+                    });
+                });
+
+                // 更新最后时间戳
+                if (newData.timestamps.length > 0) {
+                    this.lastTimestamp = Math.max(...newData.timestamps);
+                }
+
+                // 按时间戳排序
+                this.data.sort((a, b) => a.timestamp - b.timestamp);
+            },
+
+            // 获取指定时间范围的数据
+            getDataInRange(startTime, endTime) {
+                const filteredData = this.data.filter(item =>
+                    item.timestamp >= startTime && item.timestamp <= endTime
+                );
+
+                return {
+                    timestamps: filteredData.map(item => item.timestamp),
+                    download: filteredData.map(item => item.download),
+                    upload: filteredData.map(item => item.upload)
+                };
+            },
+
+            // 清理过期数据
+            cleanup(keepDuration) {
+                const cutoffTime = Math.floor(Date.now() / 1000) - keepDuration;
+                this.data = this.data.filter(item => item.timestamp > cutoffTime);
+            }
+        };
+
+        // 数据获取任务
+        function setupDataFetcher() {
+            if (fetchTimer) {
+                clearInterval(fetchTimer);
+            }
+
+            const fetchInterval = 10000;  // 每10秒获取一次数据
+
+            function fetchData() {
+                const now = Math.floor(Date.now() / 1000);
+                fetch(`/latest/hour?last_timestamp=${dataStore.lastTimestamp || (now - 3600)}&align=${now}`)
+                    .then(response => response.json())
+                    .then(newData => {
+                        if (newData.timestamps.length > 0) {
+                            dataStore.addData(newData);
+                            // 清理超过1小时的旧数据
+                            dataStore.cleanup(3600);
+                        }
+                    })
+                    .catch(error => console.error('Error fetching data:', error));
+            }
+
+            // 立即执行一次
+            fetchData();
+            // 设置定时任务
+            fetchTimer = setInterval(fetchData, fetchInterval);
+        }
+
+        // 图表更新任务
+        function setupChartUpdater(timeRange) {
+            if (updateTimer) {
+                clearInterval(updateTimer);
+            }
+
+            const unitInterval = getUnitInterval(timeRange);
+            const now = Date.now();
+            const nextTick = Math.ceil(now / unitInterval) * unitInterval;
+            const initialDelay = nextTick - now;
+
+            setTimeout(() => {
+                updateChart();
+                updateTimer = setInterval(updateChart, unitInterval);
+            }, initialDelay);
+        }
+
+        function updateChart() {
+            const timeRange = document.getElementById('timeRange').value;
+            const now = Math.floor(Date.now() / 1000);
+            const duration = getDuration(timeRange);
+            const startTime = now - duration;
+
+            // 从本地数据存储获取数据
+            const data = dataStore.getDataInRange(startTime, now);
+
+            if (chart) {
+                // 更新现有图表
+                chart.data.datasets[0].data = data.timestamps.map((ts, i) => ({
+                    x: ts * 1000,
+                    y: data.download[i]
+                }));
+                chart.data.datasets[1].data = data.timestamps.map((ts, i) => ({
+                    x: ts * 1000,
+                    y: data.upload[i]
+                }));
+
+                chart.options.scales.x.min = startTime * 1000;
+                chart.options.scales.x.max = now * 1000;
+
+                chart.update('none');
+            } else {
+                // 首次创建图表
+                createChart(data);
+            }
+        }
 
         // 计算不同时间范围的单位时间（秒）
         function getUnitInterval(timeRange) {
@@ -71,43 +196,6 @@
                 'week': 3600      // 1小时
             };
             return intervals[timeRange] * 1000; // 转换为毫秒
-        }
-
-        function setupCronRefresh(timeRange) {
-            if (updateTimer) {
-                clearInterval(updateTimer);
-            }
-
-            const unitInterval = getUnitInterval(timeRange);  // 毫秒
-
-            // 计算到下一个整数时间点的延迟
-            const now = Date.now();
-            const nextTick = Math.ceil(now / unitInterval) * unitInterval;
-            const initialDelay = nextTick - now;
-
-            // 先等待到下一个整数时间点
-            setTimeout(() => {
-                // 立即执行一次更新
-                updateData();
-
-                // 然后设置固定间隔的更新
-                updateTimer = setInterval(() => {
-                    const currentTime = Date.now();
-                    // 检查是否在预期的时间点上
-                    const expectedTime = Math.round(currentTime / unitInterval) * unitInterval;
-                    const drift = Math.abs(currentTime - expectedTime);
-
-                    if (drift > 100) {  // 如果时间偏差超过100ms
-                        console.log(`Time drift detected: ${drift}ms, resetting timer`);
-                        setupCronRefresh(timeRange);  // 重新设置定时器
-                        return;
-                    }
-
-                    updateData();
-                }, unitInterval);
-            }, initialDelay);
-
-            console.log(`Timer set for ${timeRange}, interval: ${unitInterval}ms, initial delay: ${initialDelay}ms`);
         }
 
         function createChart(data) {
@@ -223,82 +311,6 @@
             isFirstLoad = false;
         }
 
-        function updateData() {
-            const timeRange = document.getElementById('timeRange').value;
-            const now = Date.now();
-            const unitInterval = getUnitInterval(timeRange) / 1000; // 转回秒
-            const alignedTime = Math.floor(now / 1000 / unitInterval) * unitInterval;
-
-            // 首次加载或切换时间范围时，获取完整数据
-            if (lastTimestamp === null) {
-                fetch(`/data/${timeRange}?align=${alignedTime}`)
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.timestamps.length > 0) {
-                            lastTimestamp = data.timestamps[data.timestamps.length - 1];
-                        }
-                        createChart(data);
-                    })
-                    .catch(error => console.error('Error:', error));
-            } else {
-                // 增量更新，只获取新数据
-                fetch(`/latest/${timeRange}?last_timestamp=${lastTimestamp}&align=${alignedTime}`)
-                    .then(response => response.json())
-                    .then(newData => {
-                        if (newData.timestamps.length > 0) {
-                            // 更新最后的时间戳
-                            lastTimestamp = newData.timestamps[newData.timestamps.length - 1];
-
-                            // 更新图表数据
-                            if (chart && chart.data.datasets) {
-                                // 保留旧的数据点
-                                const oldData = {
-                                    download: chart.data.datasets[0].data.slice(),
-                                    upload: chart.data.datasets[1].data.slice()
-                                };
-
-                                // 将新数据转换为图表数据点格式
-                                const newPoints = newData.timestamps.map((ts, i) => ({
-                                    timestamp: ts,
-                                    download: {
-                                        x: ts * 1000,
-                                        y: newData.download[i]
-                                    },
-                                    upload: {
-                                        x: ts * 1000,
-                                        y: newData.upload[i]
-                                    }
-                                }));
-
-                                // 更新数据集，替换重叠时间范围的数据
-                                chart.data.datasets[0].data = oldData.download
-                                    .filter(point => point.x < newPoints[0].timestamp * 1000)
-                                    .concat(newPoints.map(p => p.download));
-
-                                chart.data.datasets[1].data = oldData.upload
-                                    .filter(point => point.x < newPoints[0].timestamp * 1000)
-                                    .concat(newPoints.map(p => p.upload));
-
-                                // 移除超出时间范围的旧数据点
-                                const minTime = alignedTime - getDuration(timeRange);
-                                chart.data.datasets.forEach(dataset => {
-                                    dataset.data = dataset.data.filter(point =>
-                                        point.x >= minTime * 1000
-                                    );
-                                });
-
-                                // 更新x轴范围
-                                chart.options.scales.x.min = minTime * 1000;
-                                chart.options.scales.x.max = alignedTime * 1000;
-
-                                chart.update('none');  // 更新图表但不使用动画
-                            }
-                        }
-                    })
-                    .catch(error => console.error('Error:', error));
-            }
-        }
-
         function getDuration(timeRange) {
             const durations = {
                 'minute': 60,
@@ -312,12 +324,12 @@
 
         document.getElementById('timeRange').addEventListener('change', () => {
             const timeRange = document.getElementById('timeRange').value;
-            lastTimestamp = null;  // 切换时间范围时重置
-            setupCronRefresh(timeRange);
+            setupChartUpdater(timeRange);
         });
 
-        // 初始加载
-        setupCronRefresh(document.getElementById('timeRange').value);
+        // 初始化
+        setupDataFetcher();
+        setupChartUpdater(document.getElementById('timeRange').value);
     </script>
 </body>
 </html>
