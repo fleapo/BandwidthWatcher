@@ -24,20 +24,83 @@
             padding: 20px;
             background-color: white;
             border-radius: 8px;
+            position: relative;
+            height: calc(100vh - 200px);
+            min-height: 400px;
         }
         .controls {
             margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
         }
         select {
             padding: 8px;
             border-radius: 4px;
             border: 1px solid #ddd;
+            flex: 1;
+            min-width: 150px;
+            max-width: 200px;
+        }
+        .status-container {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #ccc;
+        }
+        .status-indicator.online {
+            background-color: #28a745;
+        }
+        .status-indicator.offline {
+            background-color: #dc3545;
+        }
+        @media (max-width: 768px) {
+            body {
+                padding: 10px;
+            }
+            .container {
+                padding: 15px;
+            }
+            .chart-container {
+                padding: 10px;
+                height: calc(100vh - 150px);
+                min-height: 300px;
+            }
+            h1 {
+                font-size: 1.5em;
+            }
+        }
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255, 255, 255, 0.8);
+            padding: 10px 20px;
+            border-radius: 4px;
+            display: none;
+        }
+        .error {
+            color: #721c24;
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            display: none;
         }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>网速监控</h1>
+        <div class="error" id="errorMessage"></div>
         <div class="controls">
             <select id="timeRange">
                 <option value="minute">最近1分钟</option>
@@ -46,8 +109,13 @@
                 <option value="day">最近24小时</option>
                 <option value="week">最近1周</option>
             </select>
+            <div class="status-container">
+                <div class="status-indicator" id="networkStatus"></div>
+                <span id="status"></span>
+            </div>
         </div>
         <div class="chart-container">
+            <div class="loading" id="loading">加载中...</div>
             <canvas id="speedChart"></canvas>
         </div>
     </div>
@@ -60,18 +128,20 @@
         let isFirstLoad = true;
         let updateTimer = null;
         let fetchTimer = null;
+        let isLoading = false;
+        let isOnline = true;
 
         // 共享的数据存储
         const dataStore = {
             data: [],  // 存储格式：{timestamp, download, upload}
             lastTimestamp: null,
+            lastError: null,
 
             // 添加新数据
             addData(newData) {
                 // 移除重复时间戳的数据
-                this.data = this.data.filter(item =>
-                    !newData.timestamps.includes(item.timestamp)
-                );
+                const newTimestamps = new Set(newData.timestamps);
+                this.data = this.data.filter(item => !newTimestamps.has(item.timestamp));
 
                 // 添加新数据
                 newData.timestamps.forEach((ts, i) => {
@@ -104,12 +174,54 @@
                 };
             },
 
+            // 获取最早的时间戳
+            getEarliestTimestamp() {
+                return this.data.length > 0 ? this.data[0].timestamp : null;
+            },
+
             // 清理过期数据
             cleanup(keepDuration) {
                 const cutoffTime = Math.floor(Date.now() / 1000) - keepDuration;
                 this.data = this.data.filter(item => item.timestamp > cutoffTime);
+            },
+
+            // 重置存储
+            reset() {
+                this.data = [];
+                this.lastTimestamp = null;
+                this.lastError = null;
             }
         };
+
+        // 显示/隐藏加载状态
+        function setLoading(loading) {
+            isLoading = loading;
+            document.getElementById('loading').style.display = loading ? 'block' : 'none';
+            document.getElementById('status').textContent = loading ? '更新中...' : '';
+        }
+
+        // 显示错误信息
+        function showError(message) {
+            const errorElement = document.getElementById('errorMessage');
+            errorElement.textContent = message;
+            errorElement.style.display = 'block';
+            setTimeout(() => {
+                errorElement.style.display = 'none';
+            }, 5000);
+        }
+
+        // 网络状态监测
+        function updateNetworkStatus(online) {
+            isOnline = online;
+            const indicator = document.getElementById('networkStatus');
+            indicator.className = 'status-indicator ' + (online ? 'online' : 'offline');
+            if (!online) {
+                showError('网络连接已断开');
+            }
+        }
+
+        window.addEventListener('online', () => updateNetworkStatus(true));
+        window.addEventListener('offline', () => updateNetworkStatus(false));
 
         // 数据获取任务
         function setupDataFetcher() {
@@ -117,26 +229,56 @@
                 clearInterval(fetchTimer);
             }
 
-            const fetchInterval = 10000;  // 每10秒获取一次数据
+            async function fetchData() {
+                if (isLoading || !isOnline) return;
 
-            function fetchData() {
-                const now = Math.floor(Date.now() / 1000);
-                fetch(`/latest/hour?last_timestamp=${dataStore.lastTimestamp || (now - 3600)}&align=${now}`)
-                    .then(response => response.json())
-                    .then(newData => {
-                        if (newData.timestamps.length > 0) {
-                            dataStore.addData(newData);
-                            // 清理超过1小时的旧数据
-                            dataStore.cleanup(3600);
-                        }
-                    })
-                    .catch(error => console.error('Error fetching data:', error));
+                try {
+                    setLoading(true);
+                    const now = Math.floor(Date.now() / 1000);
+                    const timeRange = document.getElementById('timeRange').value;
+                    const duration = getDuration(timeRange);
+
+                    // 计算需要获取的时间范围
+                    const oldestNeededTime = now - duration;
+
+                    // 确定获取数据的起始时间
+                    let fetchStartTime;
+                    const earliestStoredTime = dataStore.getEarliestTimestamp();
+
+                    if (!earliestStoredTime || earliestStoredTime > oldestNeededTime) {
+                        fetchStartTime = oldestNeededTime;
+                    } else {
+                        fetchStartTime = dataStore.lastTimestamp || oldestNeededTime;
+                    }
+
+                    const response = await fetch(`/latest/hour?last_timestamp=${fetchStartTime}&align=${now}`);
+                    if (!response.ok) {
+                        throw new Error(`获取数据失败: ${response.status}`);
+                    }
+
+                    const newData = await response.json();
+                    if (newData.timestamps.length > 0) {
+                        dataStore.addData(newData);
+                        dataStore.cleanup(duration * 1.2);
+                    }
+
+                    if (dataStore.lastError) {
+                        dataStore.lastError = null;
+                        document.getElementById('errorMessage').style.display = 'none';
+                    }
+                } catch (error) {
+                    console.error('Error fetching data:', error);
+                    if (error.message !== dataStore.lastError) {
+                        dataStore.lastError = error.message;
+                        showError(error.message);
+                    }
+                } finally {
+                    setLoading(false);
+                }
             }
 
-            // 立即执行一次
             fetchData();
-            // 设置定时任务
-            fetchTimer = setInterval(fetchData, fetchInterval);
+            fetchTimer = setInterval(fetchData, 5000);
         }
 
         // 图表更新任务
@@ -150,11 +292,47 @@
             const nextTick = Math.ceil(now / unitInterval) * unitInterval;
             const initialDelay = nextTick - now;
 
+            let lastUpdateTime = 0;
+            const minUpdateInterval = 100; // 最小更新间隔（毫秒）
+
+            function scheduleNextUpdate() {
+                const now = Date.now();
+                const nextTick = Math.ceil(now / unitInterval) * unitInterval;
+                const delay = nextTick - now;
+
+                setTimeout(() => {
+                    const currentTime = Date.now();
+                    if (currentTime - lastUpdateTime >= minUpdateInterval) {
+                        updateChart();
+                        lastUpdateTime = currentTime;
+                    }
+                    scheduleNextUpdate();
+                }, delay);
+            }
+
             setTimeout(() => {
                 updateChart();
-                updateTimer = setInterval(updateChart, unitInterval);
+                lastUpdateTime = Date.now();
+                scheduleNextUpdate();
             }, initialDelay);
         }
+
+        // 重置图表和数据
+        function resetChart() {
+            if (chart) {
+                chart.destroy();
+                chart = null;
+            }
+            dataStore.reset();
+            isFirstLoad = true;
+        }
+
+        document.getElementById('timeRange').addEventListener('change', () => {
+            const timeRange = document.getElementById('timeRange').value;
+            resetChart();
+            setupDataFetcher();
+            setupChartUpdater(timeRange);
+        });
 
         function updateChart() {
             const timeRange = document.getElementById('timeRange').value;
@@ -176,6 +354,7 @@
                     y: data.upload[i]
                 }));
 
+                // 更新时间轴范围
                 chart.options.scales.x.min = startTime * 1000;
                 chart.options.scales.x.max = now * 1000;
 
@@ -201,27 +380,7 @@
         function createChart(data) {
             const ctx = document.getElementById('speedChart').getContext('2d');
             const timeRange = document.getElementById('timeRange').value;
-            const now = Math.floor(Date.now() / 1000);  // 当前时间戳（秒）
-
-            // 根据选择的时间范围确定起始时间
-            let startTime;
-            switch(timeRange) {
-                case 'minute':
-                    startTime = now - 60;  // 1分钟
-                    break;
-                case 'tenminutes':
-                    startTime = now - 600;  // 10分钟
-                    break;
-                case 'hour':
-                    startTime = now - 3600;  // 1小时
-                    break;
-                case 'day':
-                    startTime = now - 86400;  // 24小时
-                    break;
-                case 'week':
-                    startTime = now - 604800;  // 1周
-                    break;
-            }
+            const now = Math.floor(Date.now() / 1000);
 
             if (chart) {
                 chart.destroy();
@@ -234,43 +393,57 @@
                         {
                             label: '下载速度 (Mbps)',
                             data: data.timestamps.map((ts, i) => ({
-                                x: ts * 1000,  // 转换为毫秒
+                                x: ts * 1000,
                                 y: data.download[i]
                             })),
                             borderColor: 'rgb(75, 192, 192)',
                             fill: false,
-                            spanGaps: true,  // 在空值处断开线条
+                            spanGaps: true,
                             tension: 0.1,
-                            pointRadius: 0,  // 默认不显示点
-                            pointHoverRadius: 4,  // hover时显示的点的大小
-                            pointHoverBackgroundColor: 'rgb(75, 192, 192)'  // hover时点的颜色
+                            pointRadius: 0,
+                            pointHoverRadius: 4,
+                            pointHoverBackgroundColor: 'rgb(75, 192, 192)',
+                            borderWidth: window.innerWidth < 768 ? 1.5 : 2
                         },
                         {
                             label: '上传速度 (Mbps)',
                             data: data.timestamps.map((ts, i) => ({
-                                x: ts * 1000,  // 转换为毫秒
+                                x: ts * 1000,
                                 y: data.upload[i]
                             })),
                             borderColor: 'rgb(255, 99, 132)',
                             fill: false,
-                            spanGaps: true,  // 在空值处断开线条
+                            spanGaps: true,
                             tension: 0.1,
-                            pointRadius: 0,  // 默认不显示点
-                            pointHoverRadius: 4,  // hover时显示的点的大小
-                            pointHoverBackgroundColor: 'rgb(255, 99, 132)'  // hover时点的颜色
+                            pointRadius: 0,
+                            pointHoverRadius: 4,
+                            pointHoverBackgroundColor: 'rgb(255, 99, 132)',
+                            borderWidth: window.innerWidth < 768 ? 1.5 : 2
                         }
                     ]
                 },
                 options: {
                     responsive: true,
+                    maintainAspectRatio: false,
                     animation: {
                         duration: isFirstLoad ? 1000 : 0
                     },
                     plugins: {
                         tooltip: {
                             mode: 'index',
-                            intersect: false
+                            intersect: false,
+                            callbacks: {
+                                label: function(context) {
+                                    return context.dataset.label + ': ' +
+                                           context.parsed.y.toFixed(2) + ' Mbps';
+                                }
+                            }
                         }
+                    },
+                    interaction: {
+                        mode: 'nearest',
+                        axis: 'x',
+                        intersect: false
                     },
                     scales: {
                         x: {
@@ -291,7 +464,15 @@
                             max: now * 1000,
                             ticks: {
                                 source: 'auto',
-                                autoSkip: true
+                                autoSkip: true,
+                                maxRotation: 0,
+                                font: {
+                                    size: window.innerWidth < 768 ? 10 : 12
+                                }
+                            },
+                            grid: {
+                                display: true,
+                                color: 'rgba(0,0,0,0.05)'
                             },
                             title: {
                                 display: true,
@@ -300,6 +481,15 @@
                         },
                         y: {
                             beginAtZero: true,
+                            ticks: {
+                                font: {
+                                    size: window.innerWidth < 768 ? 10 : 12
+                                }
+                            },
+                            grid: {
+                                display: true,
+                                color: 'rgba(0,0,0,0.05)'
+                            },
                             title: {
                                 display: true,
                                 text: '速度 (Mbps)'
@@ -322,9 +512,15 @@
             return durations[timeRange];
         }
 
-        document.getElementById('timeRange').addEventListener('change', () => {
-            const timeRange = document.getElementById('timeRange').value;
-            setupChartUpdater(timeRange);
+        // 窗口大小变化时重新调整图表
+        let resizeTimer;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(() => {
+                if (chart) {
+                    chart.resize();
+                }
+            }, 250);
         });
 
         // 初始化
