@@ -170,6 +170,23 @@ def downsample_data(timestamps, downloads, uploads, timerange, max_points, align
     # 获取采样间隔
     interval = get_interval(timerange)
 
+    # 计算实际数据的平均间隔
+    if len(timestamps) > 1:
+        actual_intervals = [t2 - t1 for t1, t2 in zip(timestamps[:-1], timestamps[1:])]
+        avg_actual_interval = sum(actual_intervals) / len(actual_intervals)
+    else:
+        avg_actual_interval = interval
+
+    # 如果采样间隔小于实际数据间隔，调整采样策略
+    if interval < avg_actual_interval:
+        # 使用实际数据点，不进行插值
+        sorted_data = sorted(zip(timestamps, downloads, uploads))
+        return (
+            [t for t, _, _ in sorted_data],
+            [d for _, d, _ in sorted_data],
+            [u for _, _, u in sorted_data]
+        )
+
     # 确保align_timestamp是interval的整数倍
     if align_timestamp:
         now = (align_timestamp // interval) * interval
@@ -195,23 +212,31 @@ def downsample_data(timestamps, downloads, uploads, timerange, max_points, align
     fixed_downloads = []
     fixed_uploads = []
 
-    for point_time in range(int(start_time), int(now + interval), int(interval)):
-        # 收集时间窗口内的数据点
-        window_data = []
-        for ts in timestamps:
-            if point_time <= ts < point_time + interval:
-                window_data.append((ts, data_map[ts][0], data_map[ts][1]))
+    current_window = []
+    current_window_start = start_time
 
-        # 如果窗口内有数据，计算平均值；否则使用null
-        if window_data:
-            window_timestamps, window_downloads, window_uploads = zip(*window_data)
-            fixed_timestamps.append(point_time)
-            fixed_downloads.append(int(sum(window_downloads) / len(window_downloads)))
-            fixed_uploads.append(int(sum(window_uploads) / len(window_uploads)))
+    for ts in sorted(timestamps):
+        # 如果时间戳在当前窗口范围内
+        if current_window_start <= ts < current_window_start + interval:
+            current_window.append((ts, data_map[ts][0], data_map[ts][1]))
         else:
-            fixed_timestamps.append(point_time)
-            fixed_downloads.append(None)
-            fixed_uploads.append(None)
+            # 处理当前窗口的数据
+            if current_window:
+                window_timestamps, window_downloads, window_uploads = zip(*current_window)
+                fixed_timestamps.append(current_window_start)
+                fixed_downloads.append(int(sum(window_downloads) / len(window_downloads)))
+                fixed_uploads.append(int(sum(window_uploads) / len(window_uploads)))
+
+            # 移动到下一个包含数据的窗口
+            current_window_start = (ts // interval) * interval
+            current_window = [(ts, data_map[ts][0], data_map[ts][1])]
+
+    # 处理最后一个窗口
+    if current_window:
+        window_timestamps, window_downloads, window_uploads = zip(*current_window)
+        fixed_timestamps.append(current_window_start)
+        fixed_downloads.append(int(sum(window_downloads) / len(window_downloads)))
+        fixed_uploads.append(int(sum(window_uploads) / len(window_uploads)))
 
     return fixed_timestamps, fixed_downloads, fixed_uploads
 

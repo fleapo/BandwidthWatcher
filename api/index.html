@@ -166,26 +166,67 @@
                     upload: []
                 };
 
-                // 对每个时间间隔进行采样
-                for (let t = alignedStart; t <= alignedEnd; t += interval) {
-                    // 收集这个时间窗口内的所有数据点
-                    const windowData = filteredData.filter(
-                        item => item.timestamp >= t && item.timestamp < t + interval
+                // 计算实际数据的平均间隔
+                const actualIntervals = [];
+                for (let i = 1; i < filteredData.length; i++) {
+                    actualIntervals.push(filteredData[i].timestamp - filteredData[i-1].timestamp);
+                }
+                const avgActualInterval = actualIntervals.length > 0
+                    ? actualIntervals.reduce((a, b) => a + b) / actualIntervals.length
+                    : interval;
+
+                // 如果采样间隔小于实际数据间隔，直接使用实际数据点
+                if (interval < avgActualInterval) {
+                    return {
+                        timestamps: filteredData.map(item => item.timestamp),
+                        download: filteredData.map(item => item.download),
+                        upload: filteredData.map(item => item.upload)
+                    };
+                }
+
+                let currentWindow = [];
+                let currentWindowStart = alignedStart;
+
+                // 对每个数据点进行处理
+                for (const item of filteredData) {
+                    // 如果当前点超出了当前窗口，处理并移动到新窗口
+                    while (item.timestamp >= currentWindowStart + interval) {
+                        if (currentWindow.length > 0) {
+                            // 计算当前窗口的平均值
+                            const avgDownload = Math.round(
+                                currentWindow.reduce((sum, item) => sum + item.download, 0) / currentWindow.length
+                            );
+                            const avgUpload = Math.round(
+                                currentWindow.reduce((sum, item) => sum + item.upload, 0) / currentWindow.length
+                            );
+
+                            sampledData.timestamps.push(currentWindowStart);
+                            sampledData.download.push(avgDownload);
+                            sampledData.upload.push(avgUpload);
+                        }
+
+                        currentWindow = [];
+                        currentWindowStart += interval;
+                    }
+
+                    // 将当前点添加到窗口
+                    if (item.timestamp >= currentWindowStart && item.timestamp < currentWindowStart + interval) {
+                        currentWindow.push(item);
+                    }
+                }
+
+                // 处理最后一个窗口
+                if (currentWindow.length > 0) {
+                    const avgDownload = Math.round(
+                        currentWindow.reduce((sum, item) => sum + item.download, 0) / currentWindow.length
+                    );
+                    const avgUpload = Math.round(
+                        currentWindow.reduce((sum, item) => sum + item.upload, 0) / currentWindow.length
                     );
 
-                    sampledData.timestamps.push(t);
-
-                    if (windowData.length > 0) {
-                        // 计算平均值
-                        const avgDownload = windowData.reduce((sum, item) => sum + item.download, 0) / windowData.length;
-                        const avgUpload = windowData.reduce((sum, item) => sum + item.upload, 0) / windowData.length;
-                        sampledData.download.push(Math.round(avgDownload));
-                        sampledData.upload.push(Math.round(avgUpload));
-                    } else {
-                        // 如果没有数据，使用0
-                        sampledData.download.push(0);
-                        sampledData.upload.push(0);
-                    }
+                    sampledData.timestamps.push(currentWindowStart);
+                    sampledData.download.push(avgDownload);
+                    sampledData.upload.push(avgUpload);
                 }
 
                 return sampledData;
