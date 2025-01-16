@@ -152,7 +152,10 @@
                             borderColor: 'rgb(75, 192, 192)',
                             fill: false,
                             spanGaps: true,  // 在空值处断开线条
-                            tension: 0.1
+                            tension: 0.1,
+                            pointRadius: 0,  // 默认不显示点
+                            pointHoverRadius: 4,  // hover时显示的点的大小
+                            pointHoverBackgroundColor: 'rgb(75, 192, 192)'  // hover时点的颜色
                         },
                         {
                             label: '上传速度 (Mbps)',
@@ -163,7 +166,10 @@
                             borderColor: 'rgb(255, 99, 132)',
                             fill: false,
                             spanGaps: true,  // 在空值处断开线条
-                            tension: 0.1
+                            tension: 0.1,
+                            pointRadius: 0,  // 默认不显示点
+                            pointHoverRadius: 4,  // hover时显示的点的大小
+                            pointHoverBackgroundColor: 'rgb(255, 99, 132)'  // hover时点的颜色
                         }
                     ]
                 },
@@ -245,17 +251,33 @@
 
                             // 更新图表数据
                             if (chart && chart.data.datasets) {
-                                // 添加新数据点
-                                newData.timestamps.forEach((ts, i) => {
-                                    chart.data.datasets[0].data.push({
+                                // 保留旧的数据点
+                                const oldData = {
+                                    download: chart.data.datasets[0].data.slice(),
+                                    upload: chart.data.datasets[1].data.slice()
+                                };
+
+                                // 将新数据转换为图表数据点格式
+                                const newPoints = newData.timestamps.map((ts, i) => ({
+                                    timestamp: ts,
+                                    download: {
                                         x: ts * 1000,
                                         y: newData.download[i]
-                                    });
-                                    chart.data.datasets[1].data.push({
+                                    },
+                                    upload: {
                                         x: ts * 1000,
                                         y: newData.upload[i]
-                                    });
-                                });
+                                    }
+                                }));
+
+                                // 更新数据集，替换重叠时间范围的数据
+                                chart.data.datasets[0].data = oldData.download
+                                    .filter(point => point.x < newPoints[0].timestamp * 1000)
+                                    .concat(newPoints.map(p => p.download));
+
+                                chart.data.datasets[1].data = oldData.upload
+                                    .filter(point => point.x < newPoints[0].timestamp * 1000)
+                                    .concat(newPoints.map(p => p.upload));
 
                                 // 移除超出时间范围的旧数据点
                                 const minTime = alignedTime - getDuration(timeRange);
