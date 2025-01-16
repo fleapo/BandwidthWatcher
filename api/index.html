@@ -59,7 +59,7 @@
         let chart;
         let isFirstLoad = true;
         let updateTimer = null;
-        let lastEndTime = null;  // 保存上一次的最新时间点
+        let lastTimestamp = null;  // 保存最后一个数据点的时间戳
 
         // 计算不同时间范围的单位时间（秒）
         function getUnitInterval(timeRange) {
@@ -221,33 +221,76 @@
             const timeRange = document.getElementById('timeRange').value;
             const now = Date.now();
             const unitInterval = getUnitInterval(timeRange) / 1000; // 转回秒
+            const alignedTime = Math.floor(now / 1000 / unitInterval) * unitInterval;
 
-            // 计算对齐的结束时间
-            let alignedTime;
-            if (lastEndTime === null) {
-                // 首次加载，直接对齐到单位时间
-                alignedTime = Math.floor(now / 1000 / unitInterval) * unitInterval;
+            // 首次加载或切换时间范围时，获取完整数据
+            if (lastTimestamp === null) {
+                fetch(`/data/${timeRange}?align=${alignedTime}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.timestamps.length > 0) {
+                            lastTimestamp = data.timestamps[data.timestamps.length - 1];
+                        }
+                        createChart(data);
+                    })
+                    .catch(error => console.error('Error:', error));
             } else {
-                // 确保与上次时间点的差值是单位时间的整数倍
-                const timeSinceLastEnd = Math.floor(now / 1000) - lastEndTime;
-                const intervals = Math.ceil(timeSinceLastEnd / unitInterval);
-                alignedTime = lastEndTime + (intervals * unitInterval);
+                // 增量更新，只获取新数据
+                fetch(`/latest/${timeRange}?last_timestamp=${lastTimestamp}&align=${alignedTime}`)
+                    .then(response => response.json())
+                    .then(newData => {
+                        if (newData.timestamps.length > 0) {
+                            // 更新最后的时间戳
+                            lastTimestamp = newData.timestamps[newData.timestamps.length - 1];
+
+                            // 更新图表数据
+                            if (chart && chart.data.datasets) {
+                                // 添加新数据点
+                                newData.timestamps.forEach((ts, i) => {
+                                    chart.data.datasets[0].data.push({
+                                        x: ts * 1000,
+                                        y: newData.download[i]
+                                    });
+                                    chart.data.datasets[1].data.push({
+                                        x: ts * 1000,
+                                        y: newData.upload[i]
+                                    });
+                                });
+
+                                // 移除超出时间范围的旧数据点
+                                const minTime = alignedTime - getDuration(timeRange);
+                                chart.data.datasets.forEach(dataset => {
+                                    dataset.data = dataset.data.filter(point =>
+                                        point.x >= minTime * 1000
+                                    );
+                                });
+
+                                // 更新x轴范围
+                                chart.options.scales.x.min = minTime * 1000;
+                                chart.options.scales.x.max = alignedTime * 1000;
+
+                                chart.update('none');  // 更新图表但不使用动画
+                            }
+                        }
+                    })
+                    .catch(error => console.error('Error:', error));
             }
+        }
 
-            // 保存这次的结束时间点
-            lastEndTime = alignedTime;
-
-            fetch(`/data/${timeRange}?align=${alignedTime}`)
-                .then(response => response.json())
-                .then(data => {
-                    createChart(data);
-                })
-                .catch(error => console.error('Error:', error));
+        function getDuration(timeRange) {
+            const durations = {
+                'minute': 60,
+                'tenminutes': 600,
+                'hour': 3600,
+                'day': 86400,
+                'week': 604800
+            };
+            return durations[timeRange];
         }
 
         document.getElementById('timeRange').addEventListener('change', () => {
             const timeRange = document.getElementById('timeRange').value;
-            lastEndTime = null;  // 切换时间范围时重置
+            lastTimestamp = null;  // 切换时间范围时重置
             setupCronRefresh(timeRange);
         });
 

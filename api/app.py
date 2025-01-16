@@ -227,6 +227,63 @@ def get_data(timerange):
     except Exception as e:
         return jsonify({"error": str(e)})
 
+@app.route('/latest/<timerange>')
+def get_latest_data(timerange):
+    try:
+        # 获取上一个时间点
+        last_timestamp = request.args.get('last_timestamp')
+        if last_timestamp:
+            last_timestamp = int(last_timestamp)
+
+        # 获取对齐时间戳
+        align_timestamp = request.args.get('align')
+        if align_timestamp:
+            align_timestamp = int(align_timestamp)
+
+        # 只查询上一个时间点之后的数据
+        supabase = get_supabase_client()
+        hostname = request.args.get('hostname')
+        query = (
+            supabase.table('speed_data')
+            .select('*')
+        )
+
+        if last_timestamp:
+            query = query.gt('timestamp', last_timestamp)
+
+        if hostname:
+            query = query.eq('hostname', hostname)
+
+        response = query.order('timestamp', desc=False).execute()
+
+        data = response.data
+        if not data:
+            return jsonify({
+                "timestamps": [],
+                "download": [],
+                "upload": []
+            })
+
+        # 分离数据
+        timestamps = [row['timestamp'] for row in data]
+        downloads = [row['download'] for row in data]
+        uploads = [row['upload'] for row in data]
+
+        # 使用对齐的时间戳进行采样
+        timestamps, downloads, uploads = downsample_data(
+            timestamps, downloads, uploads, timerange, MAX_POINTS, align_timestamp
+        )
+
+        result = {
+            "timestamps": timestamps,
+            "download": downloads,
+            "upload": uploads
+        }
+
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
 @app.route('/')
 def serve_frontend():
     return send_from_directory('.', 'index.html')
