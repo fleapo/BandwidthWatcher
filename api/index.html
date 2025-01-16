@@ -73,26 +73,41 @@
             return intervals[timeRange] * 1000; // 转换为毫秒
         }
 
-        // 计算下一个更新时间点
-        function getNextUpdateTime(timeRange) {
-            const now = Date.now();
-            const unitInterval = getUnitInterval(timeRange);
-            return Math.ceil(now / unitInterval) * unitInterval;
-        }
-
-        // 设置下一次更新的定时器
-        function scheduleNextUpdate(timeRange) {
+        function setupCronRefresh(timeRange) {
             if (updateTimer) {
-                clearTimeout(updateTimer);
+                clearInterval(updateTimer);
             }
 
-            const nextUpdateTime = getNextUpdateTime(timeRange);
-            const delay = nextUpdateTime - Date.now();
+            const unitInterval = getUnitInterval(timeRange);  // 毫秒
 
-            updateTimer = setTimeout(() => {
+            // 计算到下一个整数时间点的延迟
+            const now = Date.now();
+            const nextTick = Math.ceil(now / unitInterval) * unitInterval;
+            const initialDelay = nextTick - now;
+
+            // 先等待到下一个整数时间点
+            setTimeout(() => {
+                // 立即执行一次更新
                 updateData();
-                scheduleNextUpdate(timeRange);
-            }, delay);
+
+                // 然后设置固定间隔的更新
+                updateTimer = setInterval(() => {
+                    const currentTime = Date.now();
+                    // 检查是否在预期的时间点上
+                    const expectedTime = Math.round(currentTime / unitInterval) * unitInterval;
+                    const drift = Math.abs(currentTime - expectedTime);
+
+                    if (drift > 100) {  // 如果时间偏差超过100ms
+                        console.log(`Time drift detected: ${drift}ms, resetting timer`);
+                        setupCronRefresh(timeRange);  // 重新设置定时器
+                        return;
+                    }
+
+                    updateData();
+                }, unitInterval);
+            }, initialDelay);
+
+            console.log(`Timer set for ${timeRange}, interval: ${unitInterval}ms, initial delay: ${initialDelay}ms`);
         }
 
         function createChart(data) {
@@ -233,13 +248,11 @@
         document.getElementById('timeRange').addEventListener('change', () => {
             const timeRange = document.getElementById('timeRange').value;
             lastEndTime = null;  // 切换时间范围时重置
-            updateData();
-            scheduleNextUpdate(timeRange);
+            setupCronRefresh(timeRange);
         });
 
         // 初始加载
-        updateData();
-        scheduleNextUpdate(document.getElementById('timeRange').value);
+        setupCronRefresh(document.getElementById('timeRange').value);
     </script>
 </body>
 </html>
