@@ -36,6 +36,11 @@
             margin-bottom: 20px;
             display: flex;
             align-items: center;
+            gap: 20px;
+        }
+        .control-group {
+            display: flex;
+            align-items: center;
             gap: 10px;
         }
         /* 下拉选择框 */
@@ -57,6 +62,52 @@
             }
             h1 { font-size: 1.5em; }
         }
+        /* 开关样式 */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 24px;
+            vertical-align: middle;
+        }
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 24px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        input:checked + .slider {
+            background-color: #2196F3;
+        }
+        input:checked + .slider:before {
+            transform: translateX(26px);
+        }
+        .switch-label {
+            margin-left: 8px;
+            vertical-align: middle;
+            color: #666;
+        }
     </style>
 </head>
 <body>
@@ -70,6 +121,20 @@
                 <option value="day">最近24小时</option>
                 <option value="week">最近1周</option>
             </select>
+            <div class="control-group">
+                <label class="switch">
+                    <input type="checkbox" id="smoothLine" checked>
+                    <span class="slider"></span>
+                </label>
+                <span class="switch-label">平滑曲线</span>
+            </div>
+            <div class="control-group">
+                <label class="switch">
+                    <input type="checkbox" id="peakCut">
+                    <span class="slider"></span>
+                </label>
+                <span class="switch-label">去除峰值</span>
+            </div>
         </div>
         <div class="chart-container">
             <canvas id="speedChart"></canvas>
@@ -414,39 +479,17 @@
          */
         function updateChart() {
             const timeRange = document.getElementById('timeRange').value;
+            const smooth = document.getElementById('smoothLine').checked;
+            const peakCut = document.getElementById('peakCut').checked;
             const now = Math.floor(Date.now() / 1000);
             const duration = getDuration(timeRange);
             const startTime = now - duration;
 
-            // 从本地数据存储获取数据并进行抽样
             const data = dataStore.getDataInRange(startTime, now, timeRange);
 
             if (chart) {
-                // 更新现有图表
-                const activeElements = chart.getActiveElements();
-                const hasHover = activeElements.length > 0;
-
-                chart.data.datasets[0].data = data.timestamps.map((ts, i) => ({
-                    x: ts * 1000,
-                    y: data.download[i]
-                }));
-                chart.data.datasets[1].data = data.timestamps.map((ts, i) => ({
-                    x: ts * 1000,
-                    y: data.upload[i]
-                }));
-
-                // 更新时间轴范围
-                chart.options.scales.x.min = startTime * 1000;
-                chart.options.scales.x.max = now * 1000;
-
-                // 如果当前有悬浮状态，使用静默更新模式
-                if (hasHover) {
-                    chart.update('none');
-                } else {
-                    chart.update('none');
-                }
+                updateChartConfig(smooth, peakCut);
             } else {
-                // 首次创建图表
                 createChart(data);
             }
         }
@@ -468,14 +511,100 @@
         }
 
         /**
+         * 应用移动平均来去除峰值
+         * @param {Array} data - 原始数据点数组
+         * @param {number} windowSize - 移动窗口大小
+         * @returns {Array} 处理后的数据点数组
+         */
+        function applyMovingAverage(data, windowSize) {
+            if (data.length < windowSize) return data;
+
+            const result = [];
+            for (let i = 0; i < data.length; i++) {
+                let sum = 0;
+                let count = 0;
+
+                // 计算前后窗口范围内的平均值
+                for (let j = Math.max(0, i - Math.floor(windowSize/2));
+                     j < Math.min(data.length, i + Math.floor(windowSize/2) + 1);
+                     j++) {
+                    sum += data[j];
+                    count++;
+                }
+
+                result.push(Math.round(sum / count));
+            }
+            return result;
+        }
+
+        /**
+         * 更新图表配置
+         * @param {boolean} smooth - 是否启用平滑
+         * @param {boolean} peakCut - 是否启用去除峰值
+         */
+        function updateChartConfig(smooth, peakCut) {
+            if (!chart) return;
+
+            const timeRange = document.getElementById('timeRange').value;
+            const now = Math.floor(Date.now() / 1000);
+            const duration = getDuration(timeRange);
+            const startTime = now - duration;
+
+            // 获取原始数据
+            const data = dataStore.getDataInRange(startTime, now, timeRange);
+
+            // 处理数据
+            let processedDownload = [...data.download];
+            let processedUpload = [...data.upload];
+
+            // 如果启用了去除峰值，应用移动平均
+            if (peakCut) {
+                const windowSize = Math.max(5, Math.ceil(data.timestamps.length / 20)); // 动态窗口大小
+                processedDownload = applyMovingAverage(processedDownload, windowSize);
+                processedUpload = applyMovingAverage(processedUpload, windowSize);
+            }
+
+            // 更新数据集
+            chart.data.datasets[0].data = data.timestamps.map((ts, i) => ({
+                x: ts * 1000,
+                y: processedDownload[i]
+            }));
+            chart.data.datasets[1].data = data.timestamps.map((ts, i) => ({
+                x: ts * 1000,
+                y: processedUpload[i]
+            }));
+
+            // 更新平滑设置
+            chart.data.datasets.forEach(dataset => {
+                dataset.tension = smooth ? 0.4 : 0;
+                dataset.cubicInterpolationMode = smooth ? 'monotone' : 'default';
+            });
+
+            chart.update('none');
+        }
+
+        /**
          * 创建图表
          * @param {Object} data - 图表数据
          */
         function createChart(data) {
             const ctx = document.getElementById('speedChart').getContext('2d');
             const timeRange = document.getElementById('timeRange').value;
+            const smooth = document.getElementById('smoothLine').checked;
+            const peakCut = document.getElementById('peakCut').checked;
             const now = Math.floor(Date.now() / 1000);
             const startTime = now - getDuration(timeRange);
+
+            // 处理数据
+            let processedDownload = [...data.download];
+            let processedUpload = [...data.upload];
+
+            // 如果启用了去除峰值，应用移动平均
+            if (peakCut) {
+                const windowSize = Math.max(5, Math.ceil(data.timestamps.length / 20)); // 动态窗口大小
+                processedDownload = applyMovingAverage(processedDownload, windowSize);
+                processedUpload = applyMovingAverage(processedUpload, windowSize);
+            }
 
             if (chart) {
                 chart.destroy();
@@ -489,12 +618,13 @@
                             label: '下载速度 (Mbps)',
                             data: data.timestamps.map((ts, i) => ({
                                 x: ts * 1000,
-                                y: data.download[i] || 0
+                                y: processedDownload[i] || 0
                             })),
                             borderColor: 'rgb(75, 192, 192)',
                             fill: false,
                             spanGaps: false,
-                            tension: 0.1,
+                            tension: smooth ? 0.4 : 0,
+                            cubicInterpolationMode: smooth ? 'monotone' : 'default',
                             pointRadius: 0,
                             pointHoverRadius: 4,
                             pointHoverBackgroundColor: 'rgb(75, 192, 192)',
@@ -504,12 +634,13 @@
                             label: '上传速度 (Mbps)',
                             data: data.timestamps.map((ts, i) => ({
                                 x: ts * 1000,
-                                y: data.upload[i] || 0
+                                y: processedUpload[i] || 0
                             })),
                             borderColor: 'rgb(255, 99, 132)',
                             fill: false,
                             spanGaps: false,
-                            tension: 0.1,
+                            tension: smooth ? 0.4 : 0,
+                            cubicInterpolationMode: smooth ? 'monotone' : 'default',
                             pointRadius: 0,
                             pointHoverRadius: 4,
                             pointHoverBackgroundColor: 'rgb(255, 99, 132)',
@@ -642,6 +773,17 @@
             resetChart();
             setupDataFetcher();
             setupChartUpdater(timeRange);
+        });
+
+        // 添加平滑切换事件监听
+        document.getElementById('smoothLine').addEventListener('change', function(e) {
+            updateChartConfig(e.target.checked, document.getElementById('peakCut').checked);
+        });
+
+        // 添加Peak Cut切换事件监听
+        document.getElementById('peakCut').addEventListener('change', function(e) {
+            const smooth = document.getElementById('smoothLine').checked;
+            updateChartConfig(smooth, e.target.checked);
         });
 
         // 初始化
