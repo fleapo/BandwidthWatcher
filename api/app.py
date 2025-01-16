@@ -160,46 +160,37 @@ def downsample_data(timestamps, downloads, uploads, timerange, max_points, align
 
     return fixed_timestamps, fixed_downloads, fixed_uploads
 
-@app.route('/data/<timerange>')
-def get_data(timerange):
+@app.route('/data')
+def get_data():
     """
-    获取指定时间范围的完整数据
-    参数:
-        timerange: 时间范围（minute/tenminutes/hour/day/week）
+    获取指定时间范围的数据
     查询参数:
-        align: 对齐时间戳
+        start_time: 开始时间戳（必需）
         hostname: 主机名（可选）
     """
     try:
         # 获取参数
-        align_timestamp = request.args.get('align')
-        if align_timestamp:
-            align_timestamp = int(align_timestamp)
-
-        # 计算起始时间
-        now = datetime.now()
-        time_ranges = {
-            'minute': timedelta(minutes=1),
-            'tenminutes': timedelta(minutes=10),
-            'hour': timedelta(hours=1),
-            'day': timedelta(days=1),
-            'week': timedelta(weeks=1)
-        }
-        if timerange not in time_ranges:
-            return jsonify({"error": "Invalid timerange"})
-
-        start_time = int((now - time_ranges[timerange]).timestamp())
+        start_time = request.args.get('start_time')
+        if not start_time:
+            return jsonify({"error": "Missing start_time parameter"})
+        start_time = int(start_time)
 
         # 查询数据
-        print(f"开始获取{timerange}数据")
+        print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, 开始获取数据，起始时间HH:MM:SS, {datetime.fromtimestamp(start_time).strftime('%H:%M:%S')}")
         fetch_start_time = datetime.now()
 
         supabase = get_supabase_client()
         query = (
             supabase.table('speed_data')
             .select('*')
-            .gte('timestamp', start_time)
         )
+
+        # 增量获取时使用 gt
+        if request.args.get('incremental') == 'true':
+            query = query.gt('timestamp', start_time)
+        else:
+            # 完整获取时使用 gte
+            query = query.gte('timestamp', start_time)
 
         hostname = request.args.get('hostname')
         if hostname:
@@ -217,75 +208,10 @@ def get_data(timerange):
                 "upload": []
             })
 
-        # 处理数据
+        # 直接返回原始数据
         timestamps = [row['timestamp'] for row in data]
         downloads = [row['download'] for row in data]
         uploads = [row['upload'] for row in data]
-
-        # 采样数据
-        timestamps, downloads, uploads = downsample_data(
-            timestamps, downloads, uploads, timerange, MAX_POINTS, align_timestamp
-        )
-
-        return jsonify({
-            "timestamps": timestamps,
-            "download": downloads,
-            "upload": uploads
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
-@app.route('/latest/<timerange>')
-def get_latest_data(timerange):
-    """
-    获取最新的增量数据
-    参数:
-        timerange: 时间范围
-    查询参数:
-        last_timestamp: 上次获取的最后时间戳
-        align: 对齐时间戳
-        hostname: 主机名（可选）
-    """
-    try:
-        # 获取参数
-        last_timestamp = request.args.get('last_timestamp')
-        if last_timestamp:
-            last_timestamp = int(last_timestamp)
-
-        align_timestamp = request.args.get('align')
-        if align_timestamp:
-            align_timestamp = int(align_timestamp)
-
-        # 查询数据
-        supabase = get_supabase_client()
-        query = supabase.table('speed_data').select('*')
-
-        if last_timestamp:
-            query = query.gt('timestamp', last_timestamp)
-
-        hostname = request.args.get('hostname')
-        if hostname:
-            query = query.eq('hostname', hostname)
-
-        response = query.order('timestamp', desc=False).execute()
-        data = response.data
-
-        if not data:
-            return jsonify({
-                "timestamps": [],
-                "download": [],
-                "upload": []
-            })
-
-        # 处理数据
-        timestamps = [row['timestamp'] for row in data]
-        downloads = [row['download'] for row in data]
-        uploads = [row['upload'] for row in data]
-
-        # 采样数据
-        timestamps, downloads, uploads = downsample_data(
-            timestamps, downloads, uploads, timerange, MAX_POINTS, align_timestamp
-        )
 
         return jsonify({
             "timestamps": timestamps,

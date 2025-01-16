@@ -128,21 +128,67 @@
             },
 
             /**
-             * 获取指定时间范围的数据
+             * 获取指定时间范围的数据，并进行抽样
              * @param {number} startTime - 开始时间戳
              * @param {number} endTime - 结束时间戳
+             * @param {string} timeRange - 时间范围类型
              * @returns {Object} 处理后的数据对象
              */
-            getDataInRange(startTime, endTime) {
+            getDataInRange(startTime, endTime, timeRange) {
+                // 首先过滤时间范围
                 const filteredData = this.data.filter(item =>
                     item.timestamp >= startTime && item.timestamp <= endTime
                 );
 
-                return {
-                    timestamps: filteredData.map(item => item.timestamp),
-                    download: filteredData.map(item => item.download || 0),
-                    upload: filteredData.map(item => item.upload || 0)
+                if (filteredData.length === 0) {
+                    return {
+                        timestamps: [],
+                        download: [],
+                        upload: []
+                    };
+                }
+
+                // 获取采样间隔
+                const interval = getUnitInterval(timeRange) / 1000; // 转换为秒
+
+                // 对齐时间点
+                const alignedStart = Math.floor(startTime / interval) * interval;
+                const alignedEnd = Math.ceil(endTime / interval) * interval;
+
+                // 创建时间点到数据的映射
+                const dataMap = new Map(
+                    filteredData.map(item => [item.timestamp, item])
+                );
+
+                const sampledData = {
+                    timestamps: [],
+                    download: [],
+                    upload: []
                 };
+
+                // 对每个时间间隔进行采样
+                for (let t = alignedStart; t <= alignedEnd; t += interval) {
+                    // 收集这个时间窗口内的所有数据点
+                    const windowData = filteredData.filter(
+                        item => item.timestamp >= t && item.timestamp < t + interval
+                    );
+
+                    sampledData.timestamps.push(t);
+
+                    if (windowData.length > 0) {
+                        // 计算平均值
+                        const avgDownload = windowData.reduce((sum, item) => sum + item.download, 0) / windowData.length;
+                        const avgUpload = windowData.reduce((sum, item) => sum + item.upload, 0) / windowData.length;
+                        sampledData.download.push(Math.round(avgDownload));
+                        sampledData.upload.push(Math.round(avgUpload));
+                    } else {
+                        // 如果没有数据，使用0
+                        sampledData.download.push(0);
+                        sampledData.upload.push(0);
+                    }
+                }
+
+                return sampledData;
             },
 
             /**
@@ -190,6 +236,7 @@
             }
 
             async function fetchData() {
+                console.log('调用fetchData一次');
                 // 如果当前有数据库请求在执行，跳过本次请求
                 if (pendingFetch) {
                     console.log('跳过请求：当前有数据库请求正在执行');
@@ -205,9 +252,12 @@
                     // 计算需要获取的时间范围
                     const oldestNeededTime = now - duration;
 
-                    // 确定获取数据的起始时间
-                    let fetchStartTime;
+                    // 确定获取数据的起始时间和更新模式
                     const earliestStoredTime = dataStore.getEarliestTimestamp();
+                    const fetchStartTime = (!earliestStoredTime || earliestStoredTime > oldestNeededTime)
+                        ? oldestNeededTime    // 如果没有数据或需要更早的数据，从需要的最早时间开始获取
+                        : dataStore.lastTimestamp || oldestNeededTime;  // 否则从最后一条数据开始获取
+                    const isIncremental = earliestStoredTime && earliestStoredTime <= oldestNeededTime;
 
                     // 创建请求对象
                     pendingFetch = {
@@ -215,33 +265,17 @@
                         timestamp: now
                     };
 
-                    if (!earliestStoredTime || earliestStoredTime > oldestNeededTime) {
-                        // 如果没有数据或需要更早的数据，使用 /data 接口获取完整数据
-                        const response = await fetch(`/data/${timeRange}?align=${now}`, {
-                            signal: controller.signal
-                        });
-                        if (!response.ok) {
-                            throw new Error(`获取数据失败: ${response.status}`);
-                        }
-                        const newData = await response.json();
-                        if (newData.timestamps.length > 0) {
-                            dataStore.addData(newData, false);  // 完整更新模式
-                            dataStore.cleanup(duration * 1.2);
-                        }
-                    } else {
-                        // 否则只获取最新数据
-                        fetchStartTime = dataStore.lastTimestamp || oldestNeededTime;
-                        const response = await fetch(`/latest/${timeRange}?last_timestamp=${fetchStartTime}&align=${now}`, {
-                            signal: controller.signal
-                        });
-                        if (!response.ok) {
-                            throw new Error(`获取数据失败: ${response.status}`);
-                        }
-                        const newData = await response.json();
-                        if (newData.timestamps.length > 0) {
-                            dataStore.addData(newData, true);  // 增量更新模式
-                            dataStore.cleanup(duration * 1.2);
-                        }
+                    // 获取数据
+                    const response = await fetch(`/data?start_time=${fetchStartTime}&incremental=${isIncremental}`, {
+                        signal: controller.signal
+                    });
+                    if (!response.ok) {
+                        throw new Error(`获取数据失败: ${response.status}`);
+                    }
+                    const newData = await response.json();
+                    if (newData.timestamps.length > 0) {
+                        dataStore.addData(newData, isIncremental);
+                        dataStore.cleanup(duration * 1.2);
                     }
                 } catch (error) {
                     if (error.name === 'AbortError') {
@@ -250,10 +284,7 @@
                         console.error('Error fetching data:', error);
                     }
                 } finally {
-                    // 只有当这个请求还是当前请求时才清除
-                    if (pendingFetch && pendingFetch.controller === controller) {
-                        pendingFetch = null;
-                    }
+                    pendingFetch = null;
                 }
             }
 
@@ -321,8 +352,8 @@
             const duration = getDuration(timeRange);
             const startTime = now - duration;
 
-            // 从本地数据存储获取数据
-            const data = dataStore.getDataInRange(startTime, now);
+            // 从本地数据存储获取数据并进行抽样
+            const data = dataStore.getDataInRange(startTime, now, timeRange);
 
             if (chart) {
                 // 更新现有图表
@@ -509,7 +540,7 @@
 
         // 窗口大小变化时重新调整图表
         let resizeTimer;
-        window.addEventListener('resize', () => {
+        window.addEventListener('resize', function() {
             clearTimeout(resizeTimer);
             resizeTimer = setTimeout(() => {
                 if (chart) {
@@ -519,7 +550,7 @@
         });
 
         // 时间范围变化处理
-        document.getElementById('timeRange').addEventListener('change', () => {
+        document.getElementById('timeRange').addEventListener('change', function() {
             const timeRange = document.getElementById('timeRange').value;
             cancelPendingFetch();
             resetChart();
