@@ -618,11 +618,27 @@
                             label: '下载速度 (Mbps)',
                             data: data.timestamps.map((ts, i) => ({
                                 x: ts * 1000,
-                                y: processedDownload[i] || 0
+                                y: processedDownload[i] || null
                             })),
                             borderColor: 'rgb(75, 192, 192)',
                             fill: false,
-                            spanGaps: false,
+                            spanGaps: true,
+                            segment: {
+                                borderDash: ctx => {
+                                    // 获取当前段的前后两个点的时间戳
+                                    const x0 = ctx.p0.parsed.x;
+                                    const x1 = ctx.p1.parsed.x;
+
+                                    // 获取采样间隔
+                                    const interval = getUnitInterval(timeRange);
+
+                                    // 如果两点之间的时间差大于采样间隔，说明中间有空数据
+                                    if ((x1 - x0) > interval * 1.5) {
+                                        return [6, 6];
+                                    }
+                                    return undefined;
+                                }
+                            },
                             tension: smooth ? 0.4 : 0,
                             cubicInterpolationMode: smooth ? 'monotone' : 'default',
                             pointRadius: 0,
@@ -634,11 +650,27 @@
                             label: '上传速度 (Mbps)',
                             data: data.timestamps.map((ts, i) => ({
                                 x: ts * 1000,
-                                y: processedUpload[i] || 0
+                                y: processedUpload[i] || null
                             })),
                             borderColor: 'rgb(255, 99, 132)',
                             fill: false,
-                            spanGaps: false,
+                            spanGaps: true,
+                            segment: {
+                                borderDash: ctx => {
+                                    // 获取当前段的前后两个点的时间戳
+                                    const x0 = ctx.p0.parsed.x;
+                                    const x1 = ctx.p1.parsed.x;
+
+                                    // 获取采样间隔
+                                    const interval = getUnitInterval(timeRange);
+
+                                    // 如果两点之间的时间差大于采样间隔，说明中间有空数据
+                                    if ((x1 - x0) > interval * 1.5) {
+                                        return [6, 6];
+                                    }
+                                    return undefined;
+                                }
+                            },
                             tension: smooth ? 0.4 : 0,
                             cubicInterpolationMode: smooth ? 'monotone' : 'default',
                             pointRadius: 0,
