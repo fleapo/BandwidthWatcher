@@ -423,6 +423,9 @@
 
             if (chart) {
                 // 更新现有图表
+                const activeElements = chart.getActiveElements();
+                const hasHover = activeElements.length > 0;
+
                 chart.data.datasets[0].data = data.timestamps.map((ts, i) => ({
                     x: ts * 1000,
                     y: data.download[i]
@@ -436,7 +439,12 @@
                 chart.options.scales.x.min = startTime * 1000;
                 chart.options.scales.x.max = now * 1000;
 
-                chart.update('none');
+                // 如果当前有悬浮状态，使用静默更新模式
+                if (hasHover) {
+                    chart.update('none');
+                } else {
+                    chart.update('none');
+                }
             } else {
                 // 首次创建图表
                 createChart(data);
@@ -531,6 +539,12 @@
                         mode: 'nearest',
                         axis: 'x',
                         intersect: false
+                    },
+                    hover: {
+                        mode: 'nearest',
+                        axis: 'x',
+                        intersect: false,
+                        animationDuration: 0
                     },
                     scales: {
                         x: {
