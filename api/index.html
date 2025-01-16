@@ -289,7 +289,19 @@
             }
 
             fetchData();
-            fetchTimer = setInterval(fetchData, 5000);
+            const timeRange = document.getElementById('timeRange').value;
+            const refreshIntervals = {
+                'minute': 1000,        // 1秒
+                'tenminutes': 5000,    // 5秒
+                'hour': 30000,         // 30秒
+                'day': null,           // 24小时不自动刷新
+                'week': null           // 1周不自动刷新
+            };
+
+            const interval = refreshIntervals[timeRange];
+            if (interval !== null) {
+                fetchTimer = setInterval(fetchData, interval);
+            }
         }
 
         /**
