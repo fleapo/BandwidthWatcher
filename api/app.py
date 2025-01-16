@@ -89,117 +89,141 @@ def record_speed():
     data_queue.put(data)
     return jsonify({"status": "success"})
 
-def downsample_data(timestamps, downloads, uploads, timerange, max_points):
+def get_interval(timerange, max_points):
+    """获取给定时间范围的单位时间间隔（秒）"""
+    # 使用固定的时间间隔，而不是动态计算
+    intervals = {
+        'minute': 1,      # 1秒
+        'tenminutes': 5,  # 5秒
+        'hour': 30,       # 30秒
+        'day': 720,       # 12分钟
+        'week': 3600      # 1小时
+    }
+    return intervals[timerange]
+
+def downsample_data(timestamps, downloads, uploads, timerange, max_points, align_timestamp=None):
     """基于固定时间点的数据采样"""
     if not timestamps:
         return [], [], []
 
-    # 使用数据中的最新时间戳，而不是当前时间
-    now = max(timestamps)
+    interval = get_interval(timerange, max_points)
 
-    # 根据时间范围确定总时长（秒）和采样间隔
-    if timerange == 'minute':
-        duration = 60
-    elif timerange == 'tenminutes':
-        duration = 600
-    elif timerange == 'hour':
-        duration = 3600
-    elif timerange == 'day':
-        duration = 86400
-    else:  # week
-        duration = 604800
+    # 确保align_timestamp是interval的整数倍
+    if align_timestamp:
+        now = (align_timestamp // interval) * interval
+    else:
+        now = (max(timestamps) // interval) * interval
 
-    interval = duration / max_points  # 采样间隔
-    start_time = now - duration
+    # 计算时间范围
+    durations = {
+        'minute': 60,
+        'tenminutes': 600,
+        'hour': 3600,
+        'day': 86400,
+        'week': 604800
+    }
+    duration = durations[timerange]
+
+    # 确保起始时间也是interval的整数倍
+    start_time = ((now - duration) // interval) * interval
 
     # 创建固定的时间点
     fixed_timestamps = []
     fixed_downloads = []
     fixed_uploads = []
 
-    # 创建时间点到数据的映射，用于快速查找
+    # 创建时间点到数据的映射
     data_map = {ts: (dl, ul) for ts, dl, ul in zip(timestamps, downloads, uploads)}
 
-    # 对每个时间点进行采样
-    for i in range(max_points + 1):  # +1 确保包含最后一个点
-        point_time = start_time + (i * interval)
-        if point_time > now:
-            break
-
+    # 对每个单位时间进行采样
+    for point_time in range(int(start_time), int(now + interval), int(interval)):
         # 定义时间窗口
-        window_start = point_time - (interval / 2)
-        window_end = point_time + (interval / 2)
+        window_start = point_time
+        window_end = point_time + interval
 
-        # 收集窗口内的所有数据点
+        # 收集窗口内的数据点
         window_data = []
         for ts in timestamps:
-            if window_start <= ts <= window_end:
+            if window_start <= ts < window_end:
                 window_data.append((ts, data_map[ts][0], data_map[ts][1]))
 
         if window_data:
-            # 如果有数据，计算平均值
+            # 计算平均值
             window_timestamps, window_downloads, window_uploads = zip(*window_data)
-            # 使用窗口内最接近中心点的时间戳
-            closest_ts = min(window_timestamps, key=lambda x: abs(x - point_time))
-            fixed_timestamps.append(closest_ts)
+            fixed_timestamps.append(point_time)
             fixed_downloads.append(int(sum(window_downloads) / len(window_downloads)))
             fixed_uploads.append(int(sum(window_uploads) / len(window_uploads)))
+        else:
+            # 如果没有数据，添加null值
+            fixed_timestamps.append(point_time)
+            fixed_downloads.append(None)
+            fixed_uploads.append(None)
 
     return fixed_timestamps, fixed_downloads, fixed_uploads
 
 @app.route('/data/<timerange>')
 def get_data(timerange):
-    now = datetime.now()
-    if timerange == 'minute':
-        start_time = int((now - timedelta(minutes=1)).timestamp())
-    elif timerange == 'tenminutes':
-        start_time = int((now - timedelta(minutes=10)).timestamp())
-    elif timerange == 'hour':
-        start_time = int((now - timedelta(hours=1)).timestamp())
-    elif timerange == 'day':
-        start_time = int((now - timedelta(days=1)).timestamp())
-    elif timerange == 'week':
-        start_time = int((now - timedelta(weeks=1)).timestamp())
-    else:
-        return jsonify({"error": "Invalid timerange"})
-
     try:
-        supabase = get_supabase_client()
-        hostname = request.args.get('hostname')
-        query = (
-            supabase.table('speed_data')
-            .select('*')
-            .gte('timestamp', start_time)
-        )
+        # 获取对齐时间戳
+        align_timestamp = request.args.get('align')
+        if align_timestamp:
+            align_timestamp = int(align_timestamp)
 
-        if hostname:
-            query = query.eq('hostname', hostname)
+        now = datetime.now()
+        if timerange == 'minute':
+            start_time = int((now - timedelta(minutes=1)).timestamp())
+        elif timerange == 'tenminutes':
+            start_time = int((now - timedelta(minutes=10)).timestamp())
+        elif timerange == 'hour':
+            start_time = int((now - timedelta(hours=1)).timestamp())
+        elif timerange == 'day':
+            start_time = int((now - timedelta(days=1)).timestamp())
+        elif timerange == 'week':
+            start_time = int((now - timedelta(weeks=1)).timestamp())
+        else:
+            return jsonify({"error": "Invalid timerange"})
 
-        response = query.order('timestamp', desc=False).execute()
+        try:
+            supabase = get_supabase_client()
+            hostname = request.args.get('hostname')
+            query = (
+                supabase.table('speed_data')
+                .select('*')
+                .gte('timestamp', start_time)
+            )
 
-        data = response.data
-        if not data:
-            return jsonify({
-                "timestamps": [],
-                "download": [],
-                "upload": []
-            })
+            if hostname:
+                query = query.eq('hostname', hostname)
 
-        # 分离数据
-        timestamps = [row['timestamp'] for row in data]
-        downloads = [row['download'] for row in data]
-        uploads = [row['upload'] for row in data]
+            response = query.order('timestamp', desc=False).execute()
 
-        # 使用基于固定时间点的采样
-        timestamps, downloads, uploads = downsample_data(timestamps, downloads, uploads, timerange, MAX_POINTS)
+            data = response.data
+            if not data:
+                return jsonify({
+                    "timestamps": [],
+                    "download": [],
+                    "upload": []
+                })
 
-        result = {
-            "timestamps": timestamps,
-            "download": downloads,
-            "upload": uploads
-        }
+            # 分离数据
+            timestamps = [row['timestamp'] for row in data]
+            downloads = [row['download'] for row in data]
+            uploads = [row['upload'] for row in data]
 
-        return jsonify(result)
+            # 使用对齐的时间戳进行采样
+            timestamps, downloads, uploads = downsample_data(
+                timestamps, downloads, uploads, timerange, MAX_POINTS, align_timestamp
+            )
+
+            result = {
+                "timestamps": timestamps,
+                "download": downloads,
+                "upload": uploads
+            }
+
+            return jsonify(result)
+        except Exception as e:
+            return jsonify({"error": str(e)})
     except Exception as e:
         return jsonify({"error": str(e)})
 

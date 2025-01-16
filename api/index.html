@@ -58,6 +58,42 @@
     <script>
         let chart;
         let isFirstLoad = true;
+        let updateTimer = null;
+        let lastEndTime = null;  // 保存上一次的最新时间点
+
+        // 计算不同时间范围的单位时间（秒）
+        function getUnitInterval(timeRange) {
+            const intervals = {
+                'minute': 1,      // 1秒
+                'tenminutes': 5,  // 5秒
+                'hour': 30,       // 30秒
+                'day': 720,       // 12分钟
+                'week': 3600      // 1小时
+            };
+            return intervals[timeRange] * 1000; // 转换为毫秒
+        }
+
+        // 计算下一个更新时间点
+        function getNextUpdateTime(timeRange) {
+            const now = Date.now();
+            const unitInterval = getUnitInterval(timeRange);
+            return Math.ceil(now / unitInterval) * unitInterval;
+        }
+
+        // 设置下一次更新的定时器
+        function scheduleNextUpdate(timeRange) {
+            if (updateTimer) {
+                clearTimeout(updateTimer);
+            }
+
+            const nextUpdateTime = getNextUpdateTime(timeRange);
+            const delay = nextUpdateTime - Date.now();
+
+            updateTimer = setTimeout(() => {
+                updateData();
+                scheduleNextUpdate(timeRange);
+            }, delay);
+        }
 
         function createChart(data) {
             const ctx = document.getElementById('speedChart').getContext('2d');
@@ -168,7 +204,25 @@
 
         function updateData() {
             const timeRange = document.getElementById('timeRange').value;
-            fetch(`/data/${timeRange}`)
+            const now = Date.now();
+            const unitInterval = getUnitInterval(timeRange) / 1000; // 转回秒
+
+            // 计算对齐的结束时间
+            let alignedTime;
+            if (lastEndTime === null) {
+                // 首次加载，直接对齐到单位时间
+                alignedTime = Math.floor(now / 1000 / unitInterval) * unitInterval;
+            } else {
+                // 确保与上次时间点的差值是单位时间的整数倍
+                const timeSinceLastEnd = Math.floor(now / 1000) - lastEndTime;
+                const intervals = Math.ceil(timeSinceLastEnd / unitInterval);
+                alignedTime = lastEndTime + (intervals * unitInterval);
+            }
+
+            // 保存这次的结束时间点
+            lastEndTime = alignedTime;
+
+            fetch(`/data/${timeRange}?align=${alignedTime}`)
                 .then(response => response.json())
                 .then(data => {
                     createChart(data);
@@ -176,13 +230,16 @@
                 .catch(error => console.error('Error:', error));
         }
 
-        document.getElementById('timeRange').addEventListener('change', updateData);
+        document.getElementById('timeRange').addEventListener('change', () => {
+            const timeRange = document.getElementById('timeRange').value;
+            lastEndTime = null;  // 切换时间范围时重置
+            updateData();
+            scheduleNextUpdate(timeRange);
+        });
 
         // 初始加载
         updateData();
-
-        // 每5秒更新一次数据
-        setInterval(updateData, 5000);
+        scheduleNextUpdate(document.getElementById('timeRange').value);
     </script>
 </body>
 </html>
