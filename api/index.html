@@ -520,13 +520,19 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    animation: {
-                        duration: isFirstLoad ? 1000 : 0
+                    animation: false,  // 禁用所有动画
+                    transitions: {
+                        active: {
+                            animation: {
+                                duration: 0  // 禁用过渡动画
+                            }
+                        }
                     },
                     plugins: {
                         tooltip: {
                             mode: 'index',
                             intersect: false,
+                            animation: false,  // 禁用提示框动画
                             callbacks: {
                                 label: function(context) {
                                     return context.dataset.label + ': ' +
@@ -544,7 +550,7 @@
                         mode: 'nearest',
                         axis: 'x',
                         intersect: false,
-                        animationDuration: 0
+                        animationDuration: 0  // 禁用悬浮动画
                     },
                     scales: {
                         x: {
