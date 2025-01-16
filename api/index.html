@@ -266,15 +266,28 @@
                     };
 
                     // 获取数据
-                    const response = await fetch(`/data?start_time=${fetchStartTime}&incremental=${isIncremental}`, {
+                    const response = await fetch(`/data?start_time=${fetchStartTime}&incremental=${isIncremental}&timerange=${timeRange}`, {
                         signal: controller.signal
                     });
                     if (!response.ok) {
                         throw new Error(`获取数据失败: ${response.status}`);
                     }
                     const newData = await response.json();
+
+                    // 检查返回的数据格式是否正确
+                    if (newData.error) {
+                        throw new Error(`服务器错误: ${newData.error}`);
+                    }
+
+                    if (!newData || !Array.isArray(newData.timestamps)) {
+                        console.error('返回的数据格式不正确:', newData);
+                        return;
+                    }
+
                     if (newData.timestamps.length > 0) {
+                        console.log('添加数据前的时间范围HH:MM:SS是', dataStore.getEarliestTimestamp(), dataStore.lastTimestamp);
                         dataStore.addData(newData, isIncremental);
+                        console.log('添加数据后的时间范围HH:MM:SS是', dataStore.getEarliestTimestamp(), dataStore.lastTimestamp);
                         dataStore.cleanup(duration * 1.2);
                     }
                 } catch (error) {

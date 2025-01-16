@@ -5,13 +5,15 @@ import os
 import threading
 import queue
 from supabase import create_client, Client
+import time
 
 app = Flask(__name__)
 CORS(app)
 
 # 配置常量
 MAX_POINTS = 120  # 最大数据点数
-WRITE_INTERVAL = 10  # 数据库写入间隔（秒）
+WRITE_INTERVAL = 5  # 延迟写入模式下的等待时间（秒）
+IMMEDIATE_WRITE = True  # 是否启用即时写入模式
 data_queue = queue.Queue()  # 数据写入队列
 
 def get_supabase_client():
@@ -34,38 +36,91 @@ init_db()
 
 def batch_write_worker():
     """
-    后台线程：批量写入数据到数据库
-    - 每WRITE_INTERVAL秒执行一次批量写入
-    - 将队列中的所有数据一次性写入数据库
-    - 出错时等待5秒后继续
+    批量写入工作线程。
+    根据配置的写入模式，执行即时写入或延迟写入。
     """
-    batch_data = []
+    global data_queue
     while True:
-        try:
-            # 收集队列中的所有数据
+        if IMMEDIATE_WRITE:
+            # 即时写入模式：只要有数据就立即写入
+            if not data_queue.empty():
+                records = []
+                try:
+                    while not data_queue.empty():
+                        record = data_queue.get_nowait()
+                        records.append({
+                            'timestamp': record['timestamp'],
+                            'download': record['download'],
+                            'upload': record['upload'],
+                            'hostname': record.get('hostname')
+                        })
+                except queue.Empty:
+                    pass
+
+                if records:
+                    try:
+                        supabase = get_supabase_client()
+                        supabase.table('speed_data').insert(records).execute()
+                    except Exception as e:
+                        print(f"Error writing to database: {e}")
+                        # 写入失败时，将数据放回队列
+                        for record in records:
+                            data_queue.put(record)
+            time.sleep(0.1)  # 短暂休眠以避免CPU占用过高
+        else:
+            # 延迟写入模式：队列空时等待一段时间再写入
+            records = []
+            last_write_time = time.time()
+
             try:
                 while True:
-                    data = data_queue.get_nowait()
-                    batch_data.append({
-                        'timestamp': data['timestamp'],
-                        'download': data['download'],
-                        'upload': data['upload'],
-                        'hostname': data.get('hostname')
-                    })
-            except queue.Empty:
-                pass
+                    try:
+                        # 非阻塞方式获取数据
+                        record = data_queue.get_nowait()
+                        records.append({
+                            'timestamp': record['timestamp'],
+                            'download': record['download'],
+                            'upload': record['upload'],
+                            'hostname': record.get('hostname')
+                        })
+                    except queue.Empty:
+                        current_time = time.time()
+                        # 如果有数据且(队列为空或已经等待足够长时间)，则执行写入
+                        if records and (data_queue.empty() and current_time - last_write_time >= WRITE_INTERVAL):
+                            try:
+                                supabase = get_supabase_client()
+                                supabase.table('speed_data').insert(records).execute()
+                                records = []
+                                last_write_time = current_time
+                            except Exception as e:
+                                print(f"Error writing to database: {e}")
+                                # 写入失败时，将数据放回队列
+                                for record in records:
+                                    data_queue.put(record)
+                            break
+                        elif not records:
+                            # 如果没有数据，短暂休眠
+                            time.sleep(0.1)
+                        elif current_time - last_write_time >= WRITE_INTERVAL:
+                            # 如果等待时间已到，执行写入
+                            try:
+                                supabase = get_supabase_client()
+                                supabase.table('speed_data').insert(records).execute()
+                                records = []
+                                last_write_time = current_time
+                            except Exception as e:
+                                print(f"Error writing to database: {e}")
+                                # 写入失败时，将数据放回队列
+                                for record in records:
+                                    data_queue.put(record)
+                            break
+            except Exception as e:
+                print(f"Error in batch write worker: {e}")
+                if records:  # 确保任何未写入的记录都放回队列
+                    for record in records:
+                        data_queue.put(record)
 
-            # 如果有数据则写入数据库
-            if batch_data:
-                supabase = get_supabase_client()
-                response = supabase.table('speed_data').insert(batch_data).execute()
-                print(f"批量写入 {len(batch_data)} 条记录到数据库")
-                batch_data = []
-
-            threading.Event().wait(WRITE_INTERVAL)
-        except Exception as e:
-            print(f"批量写入出错: {e}")
-            threading.Event().wait(5)
+            time.sleep(0.1)  # 短暂休眠以避免CPU占用过高
 
 # 启动后台写入线程
 write_thread = threading.Thread(target=batch_write_worker, daemon=True)
@@ -175,49 +230,60 @@ def get_data():
             return jsonify({"error": "Missing start_time parameter"})
         start_time = int(start_time)
 
+        # 获取时间范围参数
+        timerange = request.args.get('timerange')
+        if not timerange:
+            return jsonify({"error": "Missing timerange parameter"})
+
+        # 计算需要获取的数据点数
+        now = int(datetime.now().timestamp())
+        time_range = now - start_time
+        duration = {
+            'minute': 60,
+            'tenminutes': 600,
+            'hour': 3600,
+            'day': 86400,
+            'week': 604800
+        }[timerange]
+        show_num = int(time_range / duration * MAX_POINTS)  # 根据时间范围计算显示点数
+        print(f'请求的时间范围是{time_range}秒, 总时间范围是{duration}秒, 计算的显示点数是{show_num}')
+        fetch_num = min(show_num * 2, MAX_POINTS * 2)  # 限制最大获取数量
+        print(f'计算的获取点数是{fetch_num}')
+
         # 查询数据
         print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, 开始获取数据，起始时间HH:MM:SS, {datetime.fromtimestamp(start_time).strftime('%H:%M:%S')}")
         fetch_start_time = datetime.now()
 
-        supabase = get_supabase_client()
-        query = (
-            supabase.table('speed_data')
-            .select('*')
-        )
+        try:
+            supabase = get_supabase_client()
 
-        # 增量获取时使用 gt
-        if request.args.get('incremental') == 'true':
-            query = query.gt('timestamp', start_time)
-        else:
-            # 完整获取时使用 gte
-            query = query.gte('timestamp', start_time)
+            # 使用数据库函数进行数据采样
+            response = (
+                supabase.schema('public')
+                .rpc('sample_speed_data', {
+                    'start_ts': start_time,
+                    'bucket_count': fetch_num
+                })
+                .execute()
+            )
+            print(f'sample_speed_data({start_time}, {fetch_num})')
+            data = response.data
 
-        hostname = request.args.get('hostname')
-        if hostname:
-            query = query.eq('hostname', hostname)
+            print(f'获取了{len(data)}条数据, 耗时{datetime.now() - fetch_start_time}')
 
-        response = query.order('timestamp', desc=False).execute()
-        data = response.data
-
-        print(f'获取了{len(data)}条数据, 耗时{datetime.now() - fetch_start_time}')
-
-        if not data:
+            # 返回数据
             return jsonify({
-                "timestamps": [],
-                "download": [],
-                "upload": []
+                "timestamps": [row['ts'] for row in data] if data else [],
+                "download": [row['download'] for row in data] if data else [],
+                "upload": [row['upload'] for row in data] if data else []
             })
 
-        # 直接返回原始数据
-        timestamps = [row['timestamp'] for row in data]
-        downloads = [row['download'] for row in data]
-        uploads = [row['upload'] for row in data]
+        except Exception as e:
+            print(f"数据查询出错: {str(e)}")
+            return jsonify({
+                "error": str(e)
+            })
 
-        return jsonify({
-            "timestamps": timestamps,
-            "download": downloads,
-            "upload": uploads
-        })
     except Exception as e:
         return jsonify({"error": str(e)})
 
