@@ -5,12 +5,14 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
+        /* 基础样式 */
         body {
             font-family: Arial, sans-serif;
             margin: 0;
             padding: 20px;
             background-color: #f5f5f5;
         }
+        /* 主容器 */
         .container {
             max-width: 1200px;
             margin: 0 auto;
@@ -19,88 +21,47 @@
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
+        /* 图表容器 */
         .chart-container {
             margin-top: 20px;
             padding: 20px;
             background-color: white;
             border-radius: 8px;
             position: relative;
-            height: calc(100vh - 200px);
+            height: 60vh;
             min-height: 400px;
         }
+        /* 控制区域 */
         .controls {
             margin-bottom: 20px;
             display: flex;
             align-items: center;
             gap: 10px;
-            flex-wrap: wrap;
         }
+        /* 下拉选择框 */
         select {
             padding: 8px;
             border-radius: 4px;
             border: 1px solid #ddd;
-            flex: 1;
             min-width: 150px;
             max-width: 200px;
         }
-        .status-container {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-        }
-        .status-indicator {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background-color: #ccc;
-        }
-        .status-indicator.online {
-            background-color: #28a745;
-        }
-        .status-indicator.offline {
-            background-color: #dc3545;
-        }
+        /* 移动端适配 */
         @media (max-width: 768px) {
-            body {
-                padding: 10px;
-            }
-            .container {
-                padding: 15px;
-            }
+            body { padding: 10px; }
+            .container { padding: 15px; }
             .chart-container {
                 padding: 10px;
-                height: calc(100vh - 150px);
+                height: 50vh;
                 min-height: 300px;
             }
-            h1 {
-                font-size: 1.5em;
-            }
-        }
-        .loading {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(255, 255, 255, 0.8);
-            padding: 10px 20px;
-            border-radius: 4px;
-            display: none;
-        }
-        .error {
-            color: #721c24;
-            background-color: #f8d7da;
-            border: 1px solid #f5c6cb;
-            padding: 10px;
-            margin: 10px 0;
-            border-radius: 4px;
-            display: none;
+            h1 { font-size: 1.5em; }
         }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>网速监控</h1>
-        <div class="error" id="errorMessage"></div>
         <div class="controls">
             <select id="timeRange">
                 <option value="minute">最近1分钟</option>
@@ -109,13 +70,8 @@
                 <option value="day">最近24小时</option>
                 <option value="week">最近1周</option>
             </select>
-            <div class="status-container">
-                <div class="status-indicator" id="networkStatus"></div>
-                <span id="status"></span>
-            </div>
         </div>
         <div class="chart-container">
-            <div class="loading" id="loading">加载中...</div>
             <canvas id="speedChart"></canvas>
         </div>
     </div>
@@ -124,32 +80,42 @@
     <script src="https://cdn.jsdelivr.net/npm/moment"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment"></script>
     <script>
-        let chart;
-        let isFirstLoad = true;
-        let updateTimer = null;
-        let fetchTimer = null;
-        let isLoading = false;
-        let isOnline = true;
+        // 全局变量
+        let chart = null;                 // 图表实例
+        let isFirstLoad = true;           // 是否首次加载
+        let updateTimer = null;           // 图表更新定时器
+        let fetchTimer = null;            // 数据获取定时器
+        let pendingFetch = null;          // 当前执行的数据库请求
 
-        // 共享的数据存储
+        /**
+         * 数据存储管理
+         */
         const dataStore = {
-            data: [],  // 存储格式：{timestamp, download, upload}
-            lastTimestamp: null,
-            lastError: null,
+            data: [],                     // 数据列表：{timestamp, download, upload}
+            lastTimestamp: null,          // 最后一条数据的时间戳
 
-            // 添加新数据
-            addData(newData) {
-                // 移除重复时间戳的数据
-                const newTimestamps = new Set(newData.timestamps);
-                this.data = this.data.filter(item => !newTimestamps.has(item.timestamp));
+            /**
+             * 添加新数据
+             * @param {Object} newData - 新数据对象
+             * @param {boolean} isIncremental - 是否为增量更新
+             */
+            addData(newData, isIncremental = false) {
+                if (!isIncremental) {
+                    // 完整更新模式：移除重复时间戳的数据
+                    const newTimestamps = new Set(newData.timestamps);
+                    this.data = this.data.filter(item => !newTimestamps.has(item.timestamp));
+                }
 
-                // 添加新数据
+                // 添加新数据（增量模式下只添加不存在的数据）
+                const existingTimestamps = new Set(this.data.map(item => item.timestamp));
                 newData.timestamps.forEach((ts, i) => {
-                    this.data.push({
-                        timestamp: ts,
-                        download: newData.download[i],
-                        upload: newData.upload[i]
-                    });
+                    if (!existingTimestamps.has(ts)) {
+                        this.data.push({
+                            timestamp: ts,
+                            download: newData.download[i],
+                            upload: newData.upload[i]
+                        });
+                    }
                 });
 
                 // 更新最后时间戳
@@ -161,7 +127,12 @@
                 this.data.sort((a, b) => a.timestamp - b.timestamp);
             },
 
-            // 获取指定时间范围的数据
+            /**
+             * 获取指定时间范围的数据
+             * @param {number} startTime - 开始时间戳
+             * @param {number} endTime - 结束时间戳
+             * @returns {Object} 处理后的数据对象
+             */
             getDataInRange(startTime, endTime) {
                 const filteredData = this.data.filter(item =>
                     item.timestamp >= startTime && item.timestamp <= endTime
@@ -169,71 +140,64 @@
 
                 return {
                     timestamps: filteredData.map(item => item.timestamp),
-                    download: filteredData.map(item => item.download),
-                    upload: filteredData.map(item => item.upload)
+                    download: filteredData.map(item => item.download || 0),
+                    upload: filteredData.map(item => item.upload || 0)
                 };
             },
 
-            // 获取最早的时间戳
+            /**
+             * 获取最早的时间戳
+             * @returns {number|null} 最早的时间戳或null
+             */
             getEarliestTimestamp() {
                 return this.data.length > 0 ? this.data[0].timestamp : null;
             },
 
-            // 清理过期数据
+            /**
+             * 清理过期数据
+             * @param {number} keepDuration - 保留的时间范围（秒）
+             */
             cleanup(keepDuration) {
                 const cutoffTime = Math.floor(Date.now() / 1000) - keepDuration;
                 this.data = this.data.filter(item => item.timestamp > cutoffTime);
             },
 
-            // 重置存储
+            /**
+             * 重置数据存储
+             */
             reset() {
                 this.data = [];
                 this.lastTimestamp = null;
-                this.lastError = null;
             }
         };
 
-        // 显示/隐藏加载状态
-        function setLoading(loading) {
-            isLoading = loading;
-            document.getElementById('loading').style.display = loading ? 'block' : 'none';
-            document.getElementById('status').textContent = loading ? '更新中...' : '';
-        }
-
-        // 显示错误信息
-        function showError(message) {
-            const errorElement = document.getElementById('errorMessage');
-            errorElement.textContent = message;
-            errorElement.style.display = 'block';
-            setTimeout(() => {
-                errorElement.style.display = 'none';
-            }, 5000);
-        }
-
-        // 网络状态监测
-        function updateNetworkStatus(online) {
-            isOnline = online;
-            const indicator = document.getElementById('networkStatus');
-            indicator.className = 'status-indicator ' + (online ? 'online' : 'offline');
-            if (!online) {
-                showError('网络连接已断开');
+        /**
+         * 取消当前数据库请求
+         */
+        function cancelPendingFetch() {
+            if (pendingFetch) {
+                pendingFetch.controller.abort();
+                pendingFetch = null;
             }
         }
 
-        window.addEventListener('online', () => updateNetworkStatus(true));
-        window.addEventListener('offline', () => updateNetworkStatus(false));
-
-        // 数据获取任务
+        /**
+         * 设置数据获取任务
+         */
         function setupDataFetcher() {
             if (fetchTimer) {
                 clearInterval(fetchTimer);
             }
 
             async function fetchData() {
-                if (isLoading || !isOnline) return;
+                // 如果当前有数据库请求在执行，跳过本次请求
+                if (pendingFetch) {
+                    console.log('跳过请求：当前有数据库请求正在执行');
+                    return;
+                }
 
+                const controller = new AbortController();
                 try {
-                    setLoading(true);
                     const now = Math.floor(Date.now() / 1000);
                     const timeRange = document.getElementById('timeRange').value;
                     const duration = getDuration(timeRange);
@@ -245,35 +209,51 @@
                     let fetchStartTime;
                     const earliestStoredTime = dataStore.getEarliestTimestamp();
 
+                    // 创建请求对象
+                    pendingFetch = {
+                        controller,
+                        timestamp: now
+                    };
+
                     if (!earliestStoredTime || earliestStoredTime > oldestNeededTime) {
-                        fetchStartTime = oldestNeededTime;
+                        // 如果没有数据或需要更早的数据，使用 /data 接口获取完整数据
+                        const response = await fetch(`/data/${timeRange}?align=${now}`, {
+                            signal: controller.signal
+                        });
+                        if (!response.ok) {
+                            throw new Error(`获取数据失败: ${response.status}`);
+                        }
+                        const newData = await response.json();
+                        if (newData.timestamps.length > 0) {
+                            dataStore.addData(newData, false);  // 完整更新模式
+                            dataStore.cleanup(duration * 1.2);
+                        }
                     } else {
+                        // 否则只获取最新数据
                         fetchStartTime = dataStore.lastTimestamp || oldestNeededTime;
-                    }
-
-                    const response = await fetch(`/latest/hour?last_timestamp=${fetchStartTime}&align=${now}`);
-                    if (!response.ok) {
-                        throw new Error(`获取数据失败: ${response.status}`);
-                    }
-
-                    const newData = await response.json();
-                    if (newData.timestamps.length > 0) {
-                        dataStore.addData(newData);
-                        dataStore.cleanup(duration * 1.2);
-                    }
-
-                    if (dataStore.lastError) {
-                        dataStore.lastError = null;
-                        document.getElementById('errorMessage').style.display = 'none';
+                        const response = await fetch(`/latest/${timeRange}?last_timestamp=${fetchStartTime}&align=${now}`, {
+                            signal: controller.signal
+                        });
+                        if (!response.ok) {
+                            throw new Error(`获取数据失败: ${response.status}`);
+                        }
+                        const newData = await response.json();
+                        if (newData.timestamps.length > 0) {
+                            dataStore.addData(newData, true);  // 增量更新模式
+                            dataStore.cleanup(duration * 1.2);
+                        }
                     }
                 } catch (error) {
-                    console.error('Error fetching data:', error);
-                    if (error.message !== dataStore.lastError) {
-                        dataStore.lastError = error.message;
-                        showError(error.message);
+                    if (error.name === 'AbortError') {
+                        console.log('数据库请求被取消');
+                    } else {
+                        console.error('Error fetching data:', error);
                     }
                 } finally {
-                    setLoading(false);
+                    // 只有当这个请求还是当前请求时才清除
+                    if (pendingFetch && pendingFetch.controller === controller) {
+                        pendingFetch = null;
+                    }
                 }
             }
 
@@ -281,7 +261,10 @@
             fetchTimer = setInterval(fetchData, 5000);
         }
 
-        // 图表更新任务
+        /**
+         * 设置图表更新任务
+         * @param {string} timeRange - 时间范围
+         */
         function setupChartUpdater(timeRange) {
             if (updateTimer) {
                 clearInterval(updateTimer);
@@ -317,7 +300,9 @@
             }, initialDelay);
         }
 
-        // 重置图表和数据
+        /**
+         * 重置图表和数据
+         */
         function resetChart() {
             if (chart) {
                 chart.destroy();
@@ -327,13 +312,9 @@
             isFirstLoad = true;
         }
 
-        document.getElementById('timeRange').addEventListener('change', () => {
-            const timeRange = document.getElementById('timeRange').value;
-            resetChart();
-            setupDataFetcher();
-            setupChartUpdater(timeRange);
-        });
-
+        /**
+         * 更新图表显示
+         */
         function updateChart() {
             const timeRange = document.getElementById('timeRange').value;
             const now = Math.floor(Date.now() / 1000);
@@ -365,7 +346,11 @@
             }
         }
 
-        // 计算不同时间范围的单位时间（秒）
+        /**
+         * 获取不同时间范围的更新间隔（毫秒）
+         * @param {string} timeRange - 时间范围
+         * @returns {number} 更新间隔
+         */
         function getUnitInterval(timeRange) {
             const intervals = {
                 'minute': 1,      // 1秒
@@ -377,10 +362,15 @@
             return intervals[timeRange] * 1000; // 转换为毫秒
         }
 
+        /**
+         * 创建图表
+         * @param {Object} data - 图表数据
+         */
         function createChart(data) {
             const ctx = document.getElementById('speedChart').getContext('2d');
             const timeRange = document.getElementById('timeRange').value;
             const now = Math.floor(Date.now() / 1000);
+            const startTime = now - getDuration(timeRange);
 
             if (chart) {
                 chart.destroy();
@@ -394,11 +384,11 @@
                             label: '下载速度 (Mbps)',
                             data: data.timestamps.map((ts, i) => ({
                                 x: ts * 1000,
-                                y: data.download[i]
+                                y: data.download[i] || 0
                             })),
                             borderColor: 'rgb(75, 192, 192)',
                             fill: false,
-                            spanGaps: true,
+                            spanGaps: false,
                             tension: 0.1,
                             pointRadius: 0,
                             pointHoverRadius: 4,
@@ -409,11 +399,11 @@
                             label: '上传速度 (Mbps)',
                             data: data.timestamps.map((ts, i) => ({
                                 x: ts * 1000,
-                                y: data.upload[i]
+                                y: data.upload[i] || 0
                             })),
                             borderColor: 'rgb(255, 99, 132)',
                             fill: false,
-                            spanGaps: true,
+                            spanGaps: false,
                             tension: 0.1,
                             pointRadius: 0,
                             pointHoverRadius: 4,
@@ -501,6 +491,11 @@
             isFirstLoad = false;
         }
 
+        /**
+         * 获取时间范围的持续时间（秒）
+         * @param {string} timeRange - 时间范围
+         * @returns {number} 持续时间
+         */
         function getDuration(timeRange) {
             const durations = {
                 'minute': 60,
@@ -521,6 +516,15 @@
                     chart.resize();
                 }
             }, 250);
+        });
+
+        // 时间范围变化处理
+        document.getElementById('timeRange').addEventListener('change', () => {
+            const timeRange = document.getElementById('timeRange').value;
+            cancelPendingFetch();
+            resetChart();
+            setupDataFetcher();
+            setupChartUpdater(timeRange);
         });
 
         // 初始化
