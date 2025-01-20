@@ -1,5 +1,5 @@
 #!/bin/bash
- 设置颜色
+# 设置颜色
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
@@ -17,8 +17,12 @@ echo "-------------------"
 # 初始化变量
 last_rx=0
 last_tx=0
+last_time=0
 
 while true; do
+    # 获取当前时间戳（秒）
+    current_time=$(cat /proc/uptime | cut -d' ' -f1)
+
     # 获取当前字节数
     current=$(ifconfig pppoe-wan | grep "RX bytes")
     # current=$(ifconfig eth0)
@@ -31,9 +35,17 @@ while true; do
     # rx=$(( last_rx + (RANDOM % 50000) + 10000 ))
     # tx=$(( last_tx + (RANDOM % 50000) + 10000 ))
     if [ $last_rx -ne 0 ]; then
+        # 计算时间差（秒）
+        time_diff=$(echo "$current_time $last_time" | awk '{printf "%.3f", $1 - $2}')
+
+        # 如果时间差太小，设为0.01以避免除以0
+        if [ "$time_diff" = "0.00" ]; then
+            time_diff="0.01"
+        fi
+
         # 计算速度 (bytes/s 转换为 KB/s)
-        rx_diff=$(( (rx - last_rx) / 1024 ))
-        tx_diff=$(( (tx - last_tx) / 1024 ))
+        rx_diff=$(echo "$rx $last_rx $time_diff" | awk '{printf "%.2f", ($1 - $2) / $3 / 1024}')
+        tx_diff=$(echo "$tx $last_tx $time_diff" | awk '{printf "%.2f", ($1 - $2) / $3 / 1024}')
 
         # 显示结果
         echo -e "${BLUE}↓ 下载速度: ${rx_diff} KB/s    ↑ 上传速度: ${tx_diff} KB/s${NC}"
@@ -41,13 +53,15 @@ while true; do
         # 发送数据到服务器
         timestamp=$(date +%s)
         curl -s -X POST -k $SERVER_URL \
-             -H "Content-Type: application/json" \             -d "{\"timestamp\": $timestamp, \"download\": $rx_diff, \"upload\": $tx_diff}" > /dev/null
+             -H "Content-Type: application/json" \
+             -d "{\"timestamp\": $timestamp, \"download\": ${rx_diff%.*}, \"upload\": ${tx_diff%.*}}" > /dev/null
     fi
 
     # 保存当前值作为下次计算用
     last_rx=$rx
     last_tx=$tx
+    last_time=$current_time
 
-    # 等待1秒
+    # 等待一小段时间
     sleep 1
 done

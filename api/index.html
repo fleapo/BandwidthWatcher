@@ -113,6 +113,9 @@
 <body>
     <div class="container">
         <h1>网速监控</h1>
+        <p>
+            注意有问题，有时曲线会断，但数据没有缺失</a>
+        </p>
         <div class="controls">
             <select id="timeRange">
                 <option value="minute">最近1分钟</option>
@@ -647,7 +650,7 @@
                 data: {
                     datasets: [
                         {
-                            label: '下载速度 (Mbps)',
+                            label: '下载速度 (KB/s)',
                             data: data.timestamps.map((ts, i) => ({
                                 x: ts * 1000,
                                 y: processedDownload[i] || null
@@ -679,7 +682,7 @@
                             borderWidth: window.innerWidth < 768 ? 1.5 : 2
                         },
                         {
-                            label: '上传速度 (Mbps)',
+                            label: '上传速度 (KB/s)',
                             data: data.timestamps.map((ts, i) => ({
                                 x: ts * 1000,
                                 y: processedUpload[i] || null
@@ -731,7 +734,7 @@
                             callbacks: {
                                 label: function(context) {
                                     return context.dataset.label + ': ' +
-                                           context.parsed.y.toFixed(2) + ' Mbps';
+                                           context.parsed.y.toFixed(2) + ' KB/s';
                                 }
                             }
                         }
@@ -794,7 +797,7 @@
                             },
                             title: {
                                 display: true,
-                                text: '速度 (Mbps)'
+                                text: '速度 (KB/s)'
                             }
                         }
                     }
