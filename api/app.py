@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, make_response
 from flask_cors import CORS
 from datetime import datetime, timedelta
 import os
@@ -313,9 +313,13 @@ def get_data():
         return jsonify({"error": str(e)})
 
 @app.route('/')
-def serve_frontend():
-    """提供前端页面"""
-    return send_from_directory('.', 'index.html')
+def index():
+    response = make_response(send_from_directory('.', 'index.html'))
+    # 设置缓存控制头
+    response.headers['Cache-Control'] = 'no-cache, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['ETag'] = 'W/"' + str(os.path.getmtime('api/index.html')) + '"'
+    return response
 
 if __name__ == '__main__':
     import dotenv
